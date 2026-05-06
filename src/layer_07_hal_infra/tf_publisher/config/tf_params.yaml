@@ -1,0 +1,11 @@
+tf_publisher:
+  publish_rate: 100.0        # Hz
+  robot_description_topic: "/robot_description"
+  joint_states_topic: "/joint_states"
+
+  # Frame graph monitoring
+  anomaly_check_interval: 5.0  # seconds
+  missing_frame_timeout: 1.0   # seconds
+
+  # Logging
+  verbose: false

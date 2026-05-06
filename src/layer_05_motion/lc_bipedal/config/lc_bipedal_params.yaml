@@ -1,0 +1,24 @@
+lc_bipedal:
+  # RL Policy
+  policy_model: "model/policy.onnx"
+  use_async_inference: false
+  observation_dim: 60
+  action_dim: 14
+
+  # Gait
+  gait_period: 0.8           # s
+  duty_factor: 0.6
+  com_height: 0.75           # m
+  step_height: 0.08          # m
+
+  # WBC (OSQP)
+  wbc_solve_time_limit_ms: 3.0
+  friction_coefficient: 0.8
+
+  # Balance
+  balance_com_threshold: 0.02      # m
+  balance_angular_threshold: 0.3   # rad
+
+  # Safety
+  max_joint_torque: 80.0     # Nm
+  consecutive_nan_limit: 3

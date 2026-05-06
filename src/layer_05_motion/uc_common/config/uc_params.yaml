@@ -1,0 +1,24 @@
+uc:
+  # Trajectory planning
+  max_velocity: 0.5          # m/s
+  max_acceleration: 1.0      # m/s^2
+
+  # Force control
+  force_mass: 1.0            # kg
+  force_damping: 10.0        # Ns/m
+  force_stiffness: 100.0     # N/m
+
+  # Gripper
+  gripper_max_width: 0.08    # m
+  gripper_max_effort: 20.0   # N
+
+  # Base compensation
+  compensator_bandwidth: 10.0  # Hz
+
+  # Self-collision
+  collision_warning_threshold: 0.05  # m
+  collision_critical_threshold: 0.02  # m
+
+  # IK
+  ik_max_iterations: 100
+  ik_tolerance: 0.001        # m

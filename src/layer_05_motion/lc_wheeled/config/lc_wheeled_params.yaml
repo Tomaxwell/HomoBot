@@ -1,0 +1,23 @@
+lc_wheeled:
+  # Chassis
+  wheel_radius: 0.05         # m
+  wheel_base: 0.4            # m
+  max_linear_speed: 1.0      # m/s
+  max_angular_speed: 1.0     # rad/s
+  linear_accel_limit: 0.5    # m/s^2
+  angular_accel_limit: 1.0   # rad/s^2
+
+  # Lift column
+  lift_min_height: 0.0       # m
+  lift_max_height: 1.0       # m
+  lift_max_velocity: 0.1     # m/s
+  lift_kp: 10.0
+  lift_ki: 0.0
+  lift_kd: 1.0
+
+  # Caster
+  num_casters: 2
+  caster_fault_timeout_ms: 500
+
+  # Safety
+  emergency_brake_decel: 2.0  # m/s^2
