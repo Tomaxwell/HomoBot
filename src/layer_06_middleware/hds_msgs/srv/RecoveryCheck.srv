@@ -1,0 +1,8 @@
+uint8 target_state
+string operator_id
+---
+bool success
+string message
+bool allowed
+uint16 error_code
+DiagnosisState[] failing_entities

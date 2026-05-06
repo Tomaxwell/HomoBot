@@ -1,0 +1,7 @@
+# GetMotionCatalog Service - Query available motions
+
+---
+# Response
+bool success
+MotionCatalog[] motions
+uint32 count

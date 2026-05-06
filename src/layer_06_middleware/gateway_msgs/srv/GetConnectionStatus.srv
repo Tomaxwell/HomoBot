@@ -1,0 +1,7 @@
+---
+uint8 state
+float32 latency_ms
+uint32 reconnect_attempts
+builtin_interfaces/Time connected_since
+uint32 bytes_sent
+uint32 bytes_received

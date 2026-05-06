@@ -1,0 +1,10 @@
+uint16 OK                              = 0
+uint16 ERR_SENSOR_IMU_NOT_FOUND        = 20041
+uint16 ERR_SENSOR_IMU_INIT_FAILED      = 20042
+uint16 ERR_SENSOR_TOUCH_NOT_FOUND      = 20043
+uint16 ERR_SENSOR_TOUCH_INIT_FAILED    = 20044
+uint16 ERR_SENSOR_IMU_DATA_STALE       = 20045
+uint16 ERR_SENSOR_TOUCH_DATA_STALE     = 20046
+
+uint16 error_code
+string message

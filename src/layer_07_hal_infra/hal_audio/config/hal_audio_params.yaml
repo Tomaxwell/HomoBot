@@ -1,0 +1,30 @@
+hal_audio_node:
+  ros__parameters:
+    audio_device_name: "hw:0,0"
+    sample_rate_hz: 16000
+    channels: 4
+    frame_size_ms: 20
+    input_gain_db: 20.0
+    output_volume: 0.8
+    enable_aec: true
+    enable_ns: true
+    enable_agc: true
+    vad_threshold: 0.7
+    vad_min_speech_duration_ms: 250
+    vad_max_silence_ms: 1500
+    asr_mode: "hybrid"
+    wake_word_model_path: "/opt/striding/models/kws.onnx"
+    asr_model_path: "/opt/striding/models/asr_streaming.onnx"
+    wake_words: ["你好小步", "小步小步"]
+    asr_language: "zh"
+    asr_max_recognition_sec: 30.0
+    tts_model_path: "/opt/striding/models/tts_vits.onnx"
+    tts_language: "zh"
+    tts_speed: 1.0
+    tts_pitch: 1.0
+    tts_cache_size: 100
+    tts_preload_phrases: ["好的", "我在", "请稍等", "已完成"]
+    cloud_asr_fallback: true
+    cloud_tts_fallback: false
+    cloud_asr_timeout_ms: 3000
+    heartbeat_rate_hz: 1.0

@@ -1,0 +1,3 @@
+hal_lidar_node:
+  ros__parameters:
+    heartbeat_rate_hz: 1.0

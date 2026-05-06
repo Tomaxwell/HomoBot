@@ -1,0 +1,8 @@
+# StopStream Service - Stop command stream
+
+bool emergency              # true=immediate stop, false=decelerate stop
+---
+# Response
+bool stopped
+uint16 error_code
+string message

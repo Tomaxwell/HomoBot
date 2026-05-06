@@ -1,0 +1,6 @@
+string requester_node
+string reason
+---
+bool accepted
+uint16 error_code
+string message

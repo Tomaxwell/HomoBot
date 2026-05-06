@@ -1,0 +1,6 @@
+string filepath
+---
+bool success
+uint16 error_code
+string message
+uint32 keyframes_loaded

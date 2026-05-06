@@ -1,0 +1,7 @@
+string map_id
+string name
+---
+bool success
+uint16 error_code
+string message
+MapInfo map_info

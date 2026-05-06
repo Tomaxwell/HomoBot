@@ -1,0 +1,4 @@
+---
+agent_msgs/AgentState state
+bool llm_connected
+uint32 session_token_count

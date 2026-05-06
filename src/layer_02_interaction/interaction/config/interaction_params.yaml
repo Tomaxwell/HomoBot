@@ -1,0 +1,25 @@
+interaction_node:
+  ros__parameters:
+    default_mode: 0
+    enable_wake_word: true
+    enable_gesture: true
+    enable_touch: true
+    enable_remote_message: true
+    wake_word_timeout_sec: 10.0
+    max_session_duration_sec: 300.0
+    input_fusion_window_ms: 500
+    voice_priority: 100
+    gesture_priority: 80
+    touch_priority: 90
+    message_priority: 70
+    min_confidence_threshold: 0.6
+    max_dialogue_turns: 10
+    context_ttl_sec: 60.0
+    max_user_profiles: 20
+    default_tts_speed: 1.0
+    enable_led_feedback: true
+    enable_motion_feedback: true
+    response_timeout_sec: 5.0
+    privacy_mode_local_only: true
+    auto_privacy_timeout_sec: 0
+    heartbeat_rate_hz: 1.0

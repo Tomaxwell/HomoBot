@@ -1,0 +1,11 @@
+# GetSystemSummary Service
+
+---
+# Response
+bool success
+SystemMetrics current_metrics
+ModuleHealth[] module_healths
+uint32 total_events_24h
+uint32 total_errors_24h
+float32 avg_cpu_24h
+float32 avg_memory_24h

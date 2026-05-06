@@ -1,0 +1,9 @@
+string user_message
+string context_json
+---
+bool success
+string response
+uint16 error_code
+---
+string current_phase
+string current_skill

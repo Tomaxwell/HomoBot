@@ -1,0 +1,9 @@
+string command_id
+string target_cloud_service
+string payload_json
+uint32 timeout_ms
+---
+bool success
+uint16 error_code
+string message
+string response_json

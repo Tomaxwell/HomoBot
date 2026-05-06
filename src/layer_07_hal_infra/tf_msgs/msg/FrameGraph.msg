@@ -1,0 +1,9 @@
+string root_frame
+string[] frame_names
+tf_msgs/FrameEdge[] edges
+string[] missing_frames
+string[] duplicate_child_frames
+uint32 disconnected_subtree_count
+bool is_tree_valid
+string validation_message
+builtin_interfaces/Time stamp

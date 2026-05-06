@@ -1,0 +1,10 @@
+string session_id
+string auth_token
+string client_type
+string client_version
+---
+bool accepted
+uint16 error_code
+string message
+string new_token
+builtin_interfaces/Time expires_at

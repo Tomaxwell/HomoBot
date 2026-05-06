@@ -1,0 +1,11 @@
+# SendMessage Service
+
+string text
+string message_type
+string target_user_id
+bool require_ack
+---
+# Response
+bool success
+uint16 error_code
+string message_id

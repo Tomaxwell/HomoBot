@@ -1,0 +1,5 @@
+---
+bool allowed
+uint8 current_state
+uint16 error_code
+string message

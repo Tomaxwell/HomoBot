@@ -1,0 +1,11 @@
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+uint8 current_connection_state
+uint32 total_commands_forwarded
+uint32 total_telemetry_uploaded
+uint32 failed_auth_attempts

@@ -1,0 +1,17 @@
+geometry_msgs/PoseStamped target_pose
+string task_id
+float64 timeout_sec
+bool use_terrain_adaptation
+---
+bool success
+uint16 error_code
+string message
+geometry_msgs/PoseStamped final_pose
+float64 total_distance_m
+float64 total_time_sec
+---
+float32 progress_percent
+float32 remaining_distance_m
+geometry_msgs/Twist current_velocity_cmd
+string current_state
+bool is_avoiding

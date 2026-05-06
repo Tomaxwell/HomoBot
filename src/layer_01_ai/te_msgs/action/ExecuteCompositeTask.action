@@ -1,0 +1,18 @@
+string task_id
+string description
+te_msgs/SubTask[] subtasks
+int32 priority
+builtin_interfaces/Duration max_execution_time
+---
+bool success
+te_msgs/TeErrorCode error
+string message
+string[] completed_subtasks
+string[] failed_subtasks
+---
+uint8 task_state
+float32 overall_progress
+string current_subtask_id
+string current_phase
+uint32 completed_subtask_count
+uint32 total_subtask_count

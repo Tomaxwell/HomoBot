@@ -1,0 +1,10 @@
+string[] groups_to_start
+string[] groups_to_stop
+string reason
+string requester_node
+---
+bool success
+uint16 error_code
+string message
+string[] started_groups
+string[] stopped_groups

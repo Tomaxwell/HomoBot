@@ -1,0 +1,9 @@
+# GetHealthStatus Service（标准模板）
+
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message

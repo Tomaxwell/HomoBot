@@ -1,0 +1,8 @@
+string device_name
+bool auto_exposure
+float32 exposure_ms           # auto=false时有效
+float32 gain                  # auto=false时有效
+---
+bool success
+uint16 error_code
+string message

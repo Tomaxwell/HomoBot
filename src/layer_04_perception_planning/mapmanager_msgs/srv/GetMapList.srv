@@ -1,0 +1,5 @@
+uint8 map_type_filter
+---
+bool success
+string message
+MapList map_list

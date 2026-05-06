@@ -1,0 +1,10 @@
+# Request（空）
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+uint32 total_interactions        # 累计交互次数
+uint32 total_tasks_proposed      # 累计提交任务数

@@ -1,0 +1,4 @@
+---
+hal_ethercat_msgs/SlaveInfo[] slaves
+bool success
+string message

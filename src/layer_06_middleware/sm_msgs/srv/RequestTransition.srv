@@ -1,0 +1,10 @@
+uint8 target_state
+int32 priority
+string requester_node
+string reason
+string task_id
+---
+bool accepted
+uint16 error_code
+string message
+uint8 current_state

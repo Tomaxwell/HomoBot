@@ -1,0 +1,9 @@
+# DeleteRecording Service
+
+string session_id
+bool confirm
+---
+# Response
+bool success
+uint16 error_code
+string message

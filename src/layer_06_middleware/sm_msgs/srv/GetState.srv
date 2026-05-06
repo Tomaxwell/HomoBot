@@ -1,0 +1,5 @@
+---
+uint8 state
+builtin_interfaces/Time entered_at
+uint32 transition_count
+string active_task_id

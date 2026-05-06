@@ -1,0 +1,8 @@
+string task_id
+string reason
+string requester_node
+---
+bool accepted
+te_msgs/TeErrorCode error
+string message
+uint8 task_state

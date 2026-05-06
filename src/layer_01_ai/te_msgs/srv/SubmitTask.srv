@@ -1,0 +1,11 @@
+string task_id
+uint8 task_type
+string parameters_json
+string requester_node
+int32 priority
+builtin_interfaces/Duration max_execution_time
+---
+bool accepted
+te_msgs/TeErrorCode error
+string task_id
+string message

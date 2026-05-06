@@ -1,0 +1,8 @@
+# StopMotion Service - Stop current playback immediately
+
+bool emergency              # true=immediate stop, false=decelerate stop
+---
+# Response
+bool stopped
+uint16 error_code
+string message

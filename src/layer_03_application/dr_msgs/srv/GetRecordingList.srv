@@ -1,0 +1,10 @@
+# GetRecordingList Service
+
+string tag_filter           # Tag filter (empty = all)
+builtin_interfaces/Time start_time  # Time range start
+builtin_interfaces/Time end_time    # Time range end
+---
+# Response
+bool success
+RecordingSession[] sessions
+uint32 count

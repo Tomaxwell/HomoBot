@@ -1,0 +1,16 @@
+# StartRecording Service
+
+string name                 # Recording name
+string description
+string[] topics             # Topics to record (empty = record all)
+string trigger_type         # "manual", "auto_fault", "auto_task"
+string task_id              # Associated task ID
+string[] tags               # Tags
+bool is_vla_mode            # Whether VLA mode
+float32 max_duration_sec    # Max recording duration (0 = unlimited)
+---
+# Response
+bool success
+uint16 error_code
+string message
+string session_id

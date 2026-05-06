@@ -1,0 +1,7 @@
+fota_msgs/UpgradePackageInfo package_info
+bool force
+---
+bool accepted
+uint16 error_code
+string message
+string upgrade_id

@@ -1,0 +1,11 @@
+# QueryLogs Service
+
+builtin_interfaces/Time start_time
+builtin_interfaces/Time end_time
+string module_filter          # Empty = all
+uint8 min_level               # Minimum log level
+---
+# Response
+bool success
+LogEntry[] logs
+uint32 count

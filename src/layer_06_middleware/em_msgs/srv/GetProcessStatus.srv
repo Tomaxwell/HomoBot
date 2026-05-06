@@ -1,0 +1,7 @@
+string target
+---
+bool success
+uint16 error_code
+string message
+ProcessStatus[] processes
+ExecutionProgress progress

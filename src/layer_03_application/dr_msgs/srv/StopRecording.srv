@@ -1,0 +1,9 @@
+# StopRecording Service
+
+string session_id
+---
+# Response
+bool success
+uint16 error_code
+string message
+RecordingSession session_info

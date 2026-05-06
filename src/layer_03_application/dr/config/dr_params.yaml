@@ -1,0 +1,18 @@
+dr_node:
+  ros__parameters:
+    heartbeat_rate_hz: 1.0
+    vla_publish_rate_hz: 10.0
+    recording_base_path: "/opt/striding/recordings"
+    max_storage_usage_percent: 90.0
+    max_recording_duration_sec: 3600.0
+    default_topics:
+      - "/camera/image_raw"
+      - "/lidar/point_cloud"
+      - "/sm/robot_state"
+      - "/te/task_state"
+      - "/mc/motion_state"
+      - "/pnc/navigation_state"
+      - "/perception/result"
+      - "/hds/health_report"
+    enable_auto_fault_recording: true
+    auto_fault_buffer_sec: 30.0

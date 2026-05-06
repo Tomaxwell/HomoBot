@@ -1,0 +1,5 @@
+---
+bool success
+string message
+bool has_active_map
+MapInfo map_info

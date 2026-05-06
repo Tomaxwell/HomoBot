@@ -1,0 +1,10 @@
+builtin_interfaces/Time stamp
+string frame_id
+uint8 state
+ObstacleList obstacles
+SemanticSegment semantics
+TraversableRegion traversable
+sensor_msgs/PointCloud2 filtered_cloud
+bool has_ground_plane
+geometry_msgs/Vector3 ground_plane_normal
+float32 ground_plane_offset

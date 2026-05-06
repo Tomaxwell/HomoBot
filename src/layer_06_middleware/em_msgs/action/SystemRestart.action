@@ -1,0 +1,11 @@
+string reason
+bool preserve_state
+---
+bool success
+uint16 error_code
+string message
+builtin_interfaces/Duration duration
+---
+uint8 phase
+uint8 progress_percent
+string current_action

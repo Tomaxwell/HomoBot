@@ -1,0 +1,8 @@
+uint8 map_type
+---
+bool success
+uint16 error_code
+string message
+sensor_msgs/PointCloud2 pointcloud_map
+OccupancyGrid3D occupancy_map
+ElevationMap elevation_map

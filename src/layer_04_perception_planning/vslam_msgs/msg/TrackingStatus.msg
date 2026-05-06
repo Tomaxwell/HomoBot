@@ -1,0 +1,5 @@
+bool tracking_lost
+uint32 consecutive_lost_frames
+float32 inlier_ratio
+float32 mean_reprojection_error
+string last_failure_reason

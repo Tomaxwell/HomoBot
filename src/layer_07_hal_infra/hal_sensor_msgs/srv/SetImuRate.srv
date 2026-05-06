@@ -1,0 +1,5 @@
+uint16 rate_hz
+---
+bool success
+uint16 error_code
+string message

@@ -1,0 +1,4 @@
+bool clear_long_term
+---
+bool success
+string message

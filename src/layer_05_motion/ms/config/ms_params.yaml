@@ -1,0 +1,12 @@
+ms_node:
+  ros__parameters:
+    output_frequency_hz: 100.0
+    max_velocity: 10.0
+    max_acceleration: 50.0
+    max_jerk: 200.0
+    max_buffer_depth: 100
+    heartbeat_rate_hz: 1.0
+    statistics_rate_hz: 1.0
+    default_interpolation: 3  # MIN_JERK
+    enable_priority_arbitration: true
+    enable_rate_limiting: true

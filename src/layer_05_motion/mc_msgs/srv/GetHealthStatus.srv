@@ -1,0 +1,18 @@
+# mc_msgs/srv/GetHealthStatus.srv
+# 查询 MC 健康状态（标准模板 + 扩展字段）
+
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+
+# 扩展字段
+uint8 current_motion_mode
+uint8 current_control_mode
+bool uc_healthy
+bool lc_healthy
+uint32 total_cycles
+uint32 error_cycles

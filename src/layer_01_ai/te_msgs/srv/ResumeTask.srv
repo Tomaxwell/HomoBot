@@ -1,0 +1,6 @@
+string task_id
+---
+bool accepted
+te_msgs/TeErrorCode error
+string message
+uint8 task_state

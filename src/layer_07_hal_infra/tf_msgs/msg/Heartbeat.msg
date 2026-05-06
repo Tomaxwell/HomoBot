@@ -1,0 +1,9 @@
+builtin_interfaces/Time stamp
+string node_name
+uint8 state
+bool healthy
+string status_message
+bool urdf_loaded
+bool frame_tree_complete
+uint32 published_transform_count
+uint32 input_timeout_count

@@ -1,0 +1,7 @@
+string config_path
+string requester_node
+---
+bool success
+uint16 error_code
+string message
+string[] changed_processes

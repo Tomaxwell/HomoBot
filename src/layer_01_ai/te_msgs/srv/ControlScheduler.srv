@@ -1,0 +1,11 @@
+uint8 OP_PAUSE     = 0
+uint8 OP_RESUME    = 1
+uint8 OP_CLEAR     = 2
+
+uint8 operation
+string reason
+---
+bool accepted
+te_msgs/TeErrorCode error
+string message
+uint8 scheduler_state

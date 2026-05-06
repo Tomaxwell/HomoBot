@@ -1,0 +1,6 @@
+string filepath
+uint8 map_type
+---
+bool success
+uint16 error_code
+string message

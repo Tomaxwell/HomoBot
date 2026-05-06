@@ -1,0 +1,6 @@
+bool include_static
+bool include_dynamic
+---
+bool success
+string message
+tf_msgs/FrameGraph frame_graph

@@ -1,0 +1,5 @@
+HealthReport report
+---
+bool accepted
+uint16 error_code
+string message

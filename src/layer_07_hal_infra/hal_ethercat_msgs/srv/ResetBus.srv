@@ -1,0 +1,4 @@
+---
+bool success
+string message
+uint8 new_bus_state

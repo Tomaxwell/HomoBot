@@ -1,0 +1,6 @@
+string session_id
+string client_type
+string client_version
+builtin_interfaces/Time connected_at
+builtin_interfaces/Time last_active_at
+bool authenticated

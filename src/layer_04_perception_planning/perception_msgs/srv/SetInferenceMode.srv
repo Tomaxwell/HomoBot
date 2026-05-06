@@ -1,0 +1,10 @@
+uint8 mode
+uint8 MODE_BALANCED   = 0
+uint8 MODE_ACCURACY   = 1
+uint8 MODE_SPEED      = 2
+uint8 MODE_LOW_POWER  = 3
+---
+bool success
+uint16 error_code
+string message
+float32 expected_fps

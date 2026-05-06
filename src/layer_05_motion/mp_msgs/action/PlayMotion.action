@@ -1,0 +1,23 @@
+# PlayMotion Action - Long-running motion playback
+
+# Goal
+string motion_id            # Motion ID to play
+string motion_name          # Motion name (used when motion_id is empty)
+float32 playback_speed      # Playback speed (1.0=normal, 2.0=2x, 0.5=half)
+bool loop                   # Whether to loop playback
+uint32 loop_count           # Loop count (0=infinite)
+uint8 priority              # Priority for conflict arbitration
+---
+# Result
+bool success
+uint16 error_code
+string message
+uint32 frames_played
+builtin_interfaces/Time actual_duration
+---
+# Feedback
+uint8 state                 # Current playback state
+float32 progress_percent
+uint32 current_frame
+uint32 total_frames
+string current_phase        # Current phase description

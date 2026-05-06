@@ -1,0 +1,6 @@
+string name
+setting_msgs/ParameterValue old_value
+setting_msgs/ParameterValue new_value
+string changed_by
+builtin_interfaces/Time changed_at
+string reason

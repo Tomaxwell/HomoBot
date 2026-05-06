@@ -1,0 +1,5 @@
+string upgrade_id
+---
+bool cancelled
+uint16 error_code
+string message

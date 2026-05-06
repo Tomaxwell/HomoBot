@@ -1,0 +1,8 @@
+---
+uint8 overall_state
+DiagnosisState[] entity_diagnoses
+uint32 healthy_count
+uint32 warning_count
+uint32 degraded_count
+uint32 fault_count
+uint32 unknown_count

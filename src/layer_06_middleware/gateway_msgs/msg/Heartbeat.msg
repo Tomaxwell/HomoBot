@@ -1,0 +1,8 @@
+builtin_interfaces/Time stamp
+string node_name
+uint8 state
+bool healthy
+string status_message
+uint32 commands_forwarded
+uint32 telemetry_uploaded
+float32 avg_latency_ms

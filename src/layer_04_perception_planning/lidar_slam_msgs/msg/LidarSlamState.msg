@@ -1,0 +1,7 @@
+uint8 state
+uint8 prev_state
+builtin_interfaces/Time state_changed_at
+uint32 keyframe_count
+uint32 map_point_count
+float32 matching_score
+bool is_degenerate

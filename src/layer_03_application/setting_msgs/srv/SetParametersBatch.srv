@@ -1,0 +1,8 @@
+setting_msgs/ParameterValue[] parameters
+string changed_by
+string reason
+---
+bool success
+uint16 error_code
+string message
+uint32 failed_index

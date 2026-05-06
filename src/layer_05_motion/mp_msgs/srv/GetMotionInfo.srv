@@ -1,0 +1,8 @@
+# GetMotionInfo Service - Query motion details
+
+string motion_id
+---
+# Response
+bool success
+MotionCatalog info
+MotionFrame preview_frame   # Preview first frame

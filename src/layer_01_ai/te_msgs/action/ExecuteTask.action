@@ -1,0 +1,16 @@
+string task_id
+uint8 task_type
+string parameters_json
+int32 priority
+builtin_interfaces/Duration max_execution_time
+---
+bool success
+te_msgs/TeErrorCode error
+string message
+builtin_interfaces/Duration actual_duration
+---
+uint8 task_state
+float32 progress_percent
+string current_phase
+string current_subtask
+builtin_interfaces/Duration elapsed_time

@@ -1,0 +1,12 @@
+# SetAudioParameters Service
+
+float32 input_gain_db       # Input gain, 999=no change
+float32 output_volume       # Output volume, 999=no change
+uint32 sample_rate_hz       # Sample rate, 0=no change
+bool enable_aec             # Echo cancellation, empty=no change
+bool enable_ns              # Noise suppression, empty=no change
+---
+# Response
+bool success
+uint16 error_code
+string message

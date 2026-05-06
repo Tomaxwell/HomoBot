@@ -1,0 +1,9 @@
+builtin_interfaces/Time stamp
+string frame_id
+float32 resolution
+geometry_msgs/Point origin
+int32 size_x
+int32 size_y
+float32[] elevation
+float32[] variance
+bool[] is_valid

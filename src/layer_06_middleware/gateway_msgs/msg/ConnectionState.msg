@@ -1,0 +1,6 @@
+uint8 state
+uint8 prev_state
+builtin_interfaces/Time state_changed_at
+string reason
+uint32 reconnect_attempts
+float32 latency_ms

@@ -1,0 +1,9 @@
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+float32 avg_inference_fps
+string[] loaded_models

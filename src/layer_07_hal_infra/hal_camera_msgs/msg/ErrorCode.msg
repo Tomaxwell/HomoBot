@@ -1,0 +1,11 @@
+uint16 OK                              = 0
+uint16 ERR_CAMERA_DEVICE_NOT_FOUND     = 20001
+uint16 ERR_CAMERA_OPEN_FAILED          = 20002
+uint16 ERR_CAMERA_STREAM_START_FAILED  = 20003
+uint16 ERR_CAMERA_FRAME_DROP           = 20004
+uint16 ERR_CAMERA_OVERHEATING          = 20005
+uint16 ERR_CAMERA_FIRMWARE_MISMATCH    = 20006
+uint16 ERR_CAMERA_USB_BANDWIDTH        = 20007
+
+uint16 error_code
+string message

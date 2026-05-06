@@ -1,0 +1,124 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(*)",
+      "Write(*)",
+      "NotebookEdit(*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(pwd)",
+      "Bash(echo:*)",
+      "Bash(which:*)",
+      "Bash(touch:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(diff:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git stash:*)",
+      "Bash(colcon build:*)",
+      "Bash(colcon test:*)",
+      "Bash(ros2 interface show:*)",
+      "Bash(ros2 topic list:*)",
+      "Bash(ros2 node list:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(clang-format:*)",
+      "Bash(ament_cpplint:*)",
+      "Bash(ament_uncrustify:*)",
+      "WebFetch(domain:docs.ros.org)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:support.claude.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:json.schemastore.org)",
+      "WebSearch",
+      "mcp__context7__*"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(shred:*)",
+      "Bash(unlink:*)",
+      "Bash(chmod:*)",
+      "Bash(chown:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(fdisk:*)",
+      "Bash(docker:*)",
+      "Bash(kubectl:*)",
+      "Bash(kill:*)",
+      "Bash(killall:*)",
+      "Bash(pkill:*)",
+      "Bash(wget:*)",
+      "Bash(curl:*)",
+      "Bash(pip:*)",
+      "Bash(pip3:*)",
+      "Bash(npm:*)",
+      "Bash(yarn:*)",
+      "Bash(pnpm:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git rebase:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(systemctl:*)",
+      "Bash(reboot:*)",
+      "Bash(shutdown:*)",
+      "Bash(sudo:*)",
+      "Bash(ros2 topic pub:*)",
+      "Bash(ros2 service call:*)",
+      "Bash(ros2 action send_goal:*)",
+      "Bash(ros2 param set:*)"
+    ],
+    "deny": [
+      "Bash(ros2 topic pub /sm/transition_request:*)",
+      "Bash(reboot:*)",
+      "Bash(shutdown:*)",
+      "Bash(sudo reboot:*)",
+      "Bash(sudo shutdown:*)"
+    ]
+  },
+  "model": "claude-sonnet-4-6",
+  "planDirectory": "./design-plans",
+  "outputStyle": "Explanatory",
+  "respectGitignore": true,
+  "attribution": {
+    "commit": "Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>",
+    "pr": "Generated with [Claude Code](https://claude.ai/code)"
+  },
+  "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+  },
+  "customSpinnerText": [
+    "Checking safety constraints...",
+    "Validating ROS2 interfaces...",
+    "Analyzing module dependencies...",
+    "Reviewing state machine transitions...",
+    "Inspecting motion safety...",
+    "Cross-referencing with PS design...",
+    "Verifying E-Stop paths...",
+    "Consulting the architecture..."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '====== 人形机器人端侧软件开发会话 ======' && echo '' && echo '[设计进度]' && ls /home/steven/striding/ros2/*_design.md 2>/dev/null | xargs -I{} basename {} _design.md | tr '\\n' ' ' && echo '' && echo '' && echo '[安全红线] E-Stop路径必须独立CallbackGroup | 运动指令必须经SM校验 | FAULT/ACTIVE_E_STOP下拒绝所有运动' && echo '======================================'"
+          }
+        ]
+      }
+    ]
+  }
+}

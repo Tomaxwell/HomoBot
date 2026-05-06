@@ -1,0 +1,10 @@
+string upgrade_id
+uint8 state
+float32 progress_percent
+string current_phase
+uint64 bytes_downloaded
+uint64 total_bytes
+float32 download_speed_bps
+builtin_interfaces/Time estimated_completion
+string version_from
+string version_to

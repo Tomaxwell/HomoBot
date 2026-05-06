@@ -1,0 +1,11 @@
+# QueryEvents Service
+
+builtin_interfaces/Time start_time
+builtin_interfaces/Time end_time
+string category_filter        # Empty = all
+uint8 min_severity            # Minimum severity level
+---
+# Response
+bool success
+SystemEvent[] events
+uint32 count

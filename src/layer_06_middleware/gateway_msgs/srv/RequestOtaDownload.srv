@@ -1,0 +1,9 @@
+string package_url
+string package_checksum
+uint64 package_size
+string version
+---
+bool accepted
+uint16 error_code
+string message
+string download_task_id

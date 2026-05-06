@@ -1,0 +1,10 @@
+# QueryMetrics Service
+
+builtin_interfaces/Time start_time
+builtin_interfaces/Time end_time
+string metric_name            # "cpu", "memory", "gpu", "disk", "network"
+---
+# Response
+bool success
+SystemMetrics[] metrics
+uint32 count

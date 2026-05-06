@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/scripts/guardrails.py --hook SessionStart",
+            "timeout": 5,
+            "statusMessage": "Loading ROS2 project guardrails"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/scripts/guardrails.py --hook PreToolUse",
+            "timeout": 5,
+            "statusMessage": "Checking command guardrails"
+          }
+        ]
+      }
+    ]
+  }
+}

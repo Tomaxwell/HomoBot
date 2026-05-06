@@ -1,0 +1,9 @@
+string device_name           # 空字符串表示所有相机
+uint8 stream_type            # 0=RGB, 1=DEPTH, 2=BOTH
+uint16 width
+uint16 height
+uint16 fps
+---
+bool success
+uint16 error_code
+string message

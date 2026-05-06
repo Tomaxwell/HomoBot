@@ -1,0 +1,8 @@
+uint8 target_control_mode
+string[] joint_names
+uint8[] joint_control_modes
+---
+bool success
+uint16 error_code
+string message
+uint8 current_control_mode

@@ -1,0 +1,99 @@
+# Synced from .claude/settings.json and .mcp.json.
+# Project-local Codex configuration for /home/steven/striding/ros2.
+
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+plan_directory = "./design-plans"
+
+[project]
+name = "striding-ros2"
+type = "ros2"
+description = "Humanoid robot edge-side software system built on ROS2."
+
+[project.permissions]
+allow = [
+  "find",
+  "ls",
+  "cat",
+  "grep",
+  "colcon build",
+  "colcon test",
+  "ros2 interface show",
+  "ros2 topic list",
+  "ros2 node list",
+  "python3 -m pytest",
+  "clang-format",
+  "ament_cpplint",
+  "ament_uncrustify",
+]
+deny = [
+  "ros2 topic pub /sm/transition_request",
+  "ros2 topic pub /sm/request_transition",
+  "systemctl",
+  "reboot",
+  "shutdown",
+]
+
+[mcp_servers.context7]
+enabled = true
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@latest"]
+
+[features]
+codex_hooks = true
+memories = true
+
+[memories]
+use_memories = true
+generate_memories = true
+no_memories_if_mcp_or_web_search = false
+
+[profiles.conservative]
+sandbox_mode = "read-only"
+approval_policy = "untrusted"
+
+[profiles.development]
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[profiles.review]
+sandbox_mode = "read-only"
+approval_policy = "on-request"
+
+[profiles.ci]
+model = "gpt-5.5"
+model_reasoning_effort = "low"
+sandbox_mode = "read-only"
+approval_policy = "never"
+
+[profiles.trusted]
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+
+[agents.architecture-advisor]
+description = "Reviews cross-module architecture boundaries and interface consistency."
+model = "gpt-5.5"
+config_file = "agents/architecture-advisor.toml"
+
+[agents.code-reviewer]
+description = "Reviews ROS2 C++ implementation changes for safety, realtime behavior, and interface hygiene."
+model = "gpt-5.5"
+config_file = "agents/code-reviewer.toml"
+
+[agents.module-designer]
+description = "Drafts Codex-owned module design documents using codex_ naming and ROS2 conventions."
+model = "gpt-5.5"
+config_file = "agents/module-designer.toml"
+
+[agents.ros2-interface-definer]
+description = "Generates and reviews ROS2 msg/srv/action packages from Codex design documents."
+model = "gpt-5.5"
+config_file = "agents/ros2-interface-definer.toml"
+
+[agents.safety-validator]
+description = "Audits motion, state-machine, and E-Stop designs against humanoid robot safety rules."
+model = "gpt-5.5"
+config_file = "agents/safety-validator.toml"

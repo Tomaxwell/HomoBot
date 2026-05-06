@@ -1,0 +1,7 @@
+uint8 mode                  # 0=continuous, 1=single, 2=wake_word
+float32 max_duration_sec    # Max recording duration (0=unlimited)
+string language             # Recognition language
+---
+bool success
+uint16 error_code
+string message

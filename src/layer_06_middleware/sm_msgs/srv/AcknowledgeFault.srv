@@ -1,0 +1,7 @@
+string operator_id
+bool shutdown_instead
+---
+bool accepted
+uint16 error_code
+string message
+uint8 current_state

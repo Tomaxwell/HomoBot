@@ -1,0 +1,21 @@
+# Speak Action - TTS synthesis and playback
+
+# Goal
+string text
+string language
+float32 speed
+float32 pitch
+bool interrupt_current      # Interrupt current playback
+
+---
+# Result
+bool success
+uint16 error_code
+string message
+builtin_interfaces/Time actual_duration
+
+---
+# Feedback
+float32 progress_percent    # Synthesis progress
+bool is_synthesizing        # Is synthesizing
+bool is_playing             # Is playing

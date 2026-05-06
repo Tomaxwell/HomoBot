@@ -1,0 +1,7 @@
+uint16 slave_id
+uint16 index
+uint8 subindex
+uint8[] data
+---
+bool success
+string message

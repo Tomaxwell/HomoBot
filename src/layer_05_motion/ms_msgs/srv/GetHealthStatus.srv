@@ -1,0 +1,13 @@
+# GetHealthStatus Service（标准模板 + 扩展字段）
+
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+
+# 扩展字段
+float32 avg_output_frequency
+float32 avg_latency_ms

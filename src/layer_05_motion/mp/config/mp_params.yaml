@@ -1,0 +1,9 @@
+mp_node:
+  ros__parameters:
+    heartbeat_rate_hz: 1.0
+    motion_library_path: "/opt/striding/motions"
+    max_playback_speed: 2.0
+    min_playback_speed: 0.1
+    default_interpolation_hz: 100.0
+    enable_loop_protection: true
+    max_loop_count: 100

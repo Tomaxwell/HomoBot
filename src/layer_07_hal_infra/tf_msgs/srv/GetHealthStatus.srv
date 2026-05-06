@@ -1,0 +1,9 @@
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+uint32 frame_count
+uint32 input_timeout_count

@@ -1,0 +1,7 @@
+string entity_id
+string entity_type
+string entity_name
+builtin_interfaces/Duration expected_report_interval
+---
+bool accepted
+uint16 error_code

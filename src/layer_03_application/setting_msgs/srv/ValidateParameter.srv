@@ -1,0 +1,6 @@
+string name
+setting_msgs/ParameterValue value
+---
+bool valid
+uint16 error_code
+string message

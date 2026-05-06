@@ -1,0 +1,5 @@
+string operator_id
+---
+bool confirmed
+uint16 error_code
+string message

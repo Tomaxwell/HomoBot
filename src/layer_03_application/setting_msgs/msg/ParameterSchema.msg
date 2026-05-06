@@ -1,0 +1,9 @@
+string name
+uint8 type
+bool required
+string description
+float64 min_value
+float64 max_value
+string[] allowed_values
+setting_msgs/ParameterValue default_value
+string unit

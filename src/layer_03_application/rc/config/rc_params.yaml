@@ -1,0 +1,27 @@
+rc_node:
+  ros__parameters:
+    metrics_rate_hz: 1.0
+    heartbeat_rate_hz: 1.0
+    max_history_size: 10000
+    heartbeat_timeout_sec: 5.0
+    enable_log_aggregation: true
+    enable_event_collection: true
+    monitored_modules:
+      - "sm_node"
+      - "em_node"
+      - "te_node"
+      - "mc_node"
+      - "mp_node"
+      - "ms_node"
+      - "pnc_node"
+      - "agent_node"
+      - "hds_node"
+      - "gateway_node"
+      - "dr_node"
+      - "perception_node"
+      - "vslam_node"
+      - "lidar_slam_node"
+      - "mapmanager_node"
+      - "fota_node"
+      - "setting_node"
+      - "rc_node"

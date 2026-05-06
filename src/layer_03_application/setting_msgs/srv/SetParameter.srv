@@ -1,0 +1,10 @@
+string name
+setting_msgs/ParameterValue value
+string changed_by
+string reason
+bool skip_validation
+---
+bool success
+uint16 error_code
+string message
+setting_msgs/ParameterValue accepted_value

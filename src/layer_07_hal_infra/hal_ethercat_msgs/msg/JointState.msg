@@ -1,0 +1,9 @@
+string[] joint_names
+float64[] position
+float64[] velocity
+float64[] effort
+float64[] temperature
+float64[] current
+uint16[] error_code
+bool[] online
+builtin_interfaces/Time stamp

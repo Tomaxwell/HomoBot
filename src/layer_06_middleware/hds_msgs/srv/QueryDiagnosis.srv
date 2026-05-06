@@ -1,0 +1,7 @@
+string entity_id
+---
+bool found
+DiagnosisState diagnosis
+HealthMetric[] latest_metrics
+builtin_interfaces/Time last_update
+uint16 error_code

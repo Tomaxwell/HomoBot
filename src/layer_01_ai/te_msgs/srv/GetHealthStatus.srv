@@ -1,0 +1,11 @@
+# Request（空）
+---
+bool success
+string node_name
+builtin_interfaces/Time uptime_since
+uint8 state
+bool healthy
+string message
+uint32 total_tasks_processed       # 累计处理任务数
+uint32 total_tasks_failed          # 累计失败任务数
+uint32 current_queue_depth         # 当前队列深度
