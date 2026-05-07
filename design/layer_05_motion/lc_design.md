@@ -76,57 +76,28 @@
 
 ### 3.2 足式状态转换图
 
-```
-                              MC: WALKING / MOTION
-                                   │
-                                   ▼
-┌───────────┐   enable_gait   ┌──────────────────┐
-│ GROUND_   │────────────────►│ DOUBLE_SUPPORT   │
-│   IDLE    │                 │        1         │
-└─────┬─────┘                 └────────┬─────────┘
-      │                                │
-      │ disable_gait                   │ left_off_ground
-      │                                ▼
-      │                         ┌──────────────────┐
-      │                         │ LEFT_SINGLE_     │◄──────────┐
-      │                         │   SUPPORT 2      │           │
-      │                         └────────┬─────────┘           │
-      │                                  │ right_landing       │
-      │                                  ▼                     │
-      │                           ┌──────────────┐             │
-      │                           │ LEFT_SWING 4 │─────────────┘
-      │                           └──────┬───────┘
-      │                                  │
-      │                                  │ left_landing
-      │                                  ▼
-      │                           ┌──────────────┐
-      │                           │ DOUBLE_SUPPORT│
-      │                           └──────┬───────┘
-      │                                  │ right_off_ground
-      │                                  ▼
-      │                         ┌──────────────────┐
-      │                         │ RIGHT_SINGLE_    │◄──────────┐
-      │                         │   SUPPORT 3      │           │
-      │                         └────────┬─────────┘           │
-      │                                  │ left_landing        │
-      │                                  ▼                     │
-      │                           ┌───────────────┐            │
-      │                           │ RIGHT_SWING 5 │────────────┘
-      │                           └───────┬───────┘
-      │                                   │
-      │         ┌─────────────────────────┘
-      │         │ right_landing
-      │         ▼
-      │  ┌──────────────────┐
-      └──│  FALLING_        │◄──── balance_lost / fall_detected
-         │  RECOVERY 6      │
-         └────────┬─────────┘
-                  │ recovery_timeout / recovery_success
-                  ▼
-           ┌──────────────┐
-           │ GROUND_      │
-           │ FAULT 7      │
-           └──────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> GROUND_IDLE
+    GROUND_IDLE --> DOUBLE_SUPPORT : enable_gait
+    DOUBLE_SUPPORT --> GROUND_IDLE : disable_gait
+
+    DOUBLE_SUPPORT --> LEFT_SINGLE_SUPPORT : left_off_ground
+    LEFT_SINGLE_SUPPORT --> LEFT_SWING : right_landing
+    LEFT_SWING --> DOUBLE_SUPPORT : left_landing
+
+    DOUBLE_SUPPORT --> RIGHT_SINGLE_SUPPORT : right_off_ground
+    RIGHT_SINGLE_SUPPORT --> RIGHT_SWING : left_landing
+    RIGHT_SWING --> DOUBLE_SUPPORT : right_landing
+
+    DOUBLE_SUPPORT --> FALLING_RECOVERY : balance_lost
+    LEFT_SINGLE_SUPPORT --> FALLING_RECOVERY : balance_lost
+    LEFT_SWING --> FALLING_RECOVERY : fall_detected
+    RIGHT_SINGLE_SUPPORT --> FALLING_RECOVERY : balance_lost
+    RIGHT_SWING --> FALLING_RECOVERY : fall_detected
+
+    FALLING_RECOVERY --> GROUND_FAULT : recovery_timeout
+    FALLING_RECOVERY --> GROUND_FAULT : recovery_success
 ```
 
 ### 3.3 足式状态转换表
@@ -159,29 +130,19 @@
 
 ### 3.5 轮式状态转换图
 
-```
-                        ┌───────────────────────────────────────┐
-                        │                                       │
-                  ┌─────┴────────┐   velocity_cmd ≠ 0    ┌─────┴──────────┐
-            ┌──►  │  WHEEL_IDLE  │──────────────────────►│  WHEEL_MOVING  │
-            │     │      0       │                       │       1        │
-            │     └──────────────┘                       └─────┬──────────┘
-            │           ▲                                      │
-            │           │         velocity_cmd = 0             │
-            │           │    ┌─────────────────────────────────┘
-            │           │    │
-            │           │    │ lift_target_changed
-            │           │    ▼
-            │           │  ┌──────────────────┐   lift_reached  ┌───────────┐
-            │           │  │   LIFT_MOVING    │────────────────►│ WHEEL_IDLE│
-            │           │  │       2          │                 │     0     │
-            │           │  └────────┬─────────┘                 └─────┬─────┘
-            │           │           │ fault / timeout                 │
-            │           │           ▼                                 │
-            │           │  ┌──────────────────┐   reset               │
-            └───────────├──│   WHEEL_FAULT    │───────────────────────┘
-                          │       3          │
-                          └──────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> WHEEL_IDLE
+    WHEEL_IDLE --> WHEEL_MOVING : velocity_cmd != 0
+    WHEEL_MOVING --> WHEEL_IDLE : velocity_cmd = 0
+
+    WHEEL_IDLE --> LIFT_MOVING : lift_target_changed
+    LIFT_MOVING --> WHEEL_IDLE : lift_reached
+
+    WHEEL_MOVING --> WHEEL_FAULT : fault / timeout
+    LIFT_MOVING --> WHEEL_FAULT : fault / timeout
+
+    WHEEL_FAULT --> WHEEL_IDLE : reset
 ```
 
 ### 3.6 轮式状态转换表
@@ -368,112 +329,42 @@ public:
 
 #### 5.1.1 足式实现（lc_bipedal.so）架构
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     LC Plugin (lc_bipedal.so)                           │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   LC Control Pipeline (1kHz)                     │   │
-│  │                                                                  │   │
-│  │  Input: BaseState + LocomotionCommand + JointState               │   │
-│  │                                                                  │   │
-│  │   ┌─────────────────┐                                           │   │
-│  │   │ State Estimator  │◄── 补充MC的BaseState（腿部状态细化）       │   │
-│  │   │                  │    · 足端位置/速度                        │   │
-│  │   │ · 足端FK         │    · 支撑多边形计算                       │   │
-│  │   │ · 支撑多边形      │                                           │   │
-│  │   └────────┬────────┘                                           │   │
-│  │            │ leg_state                                          │   │
-│  │            ▼                                                    │   │
-│  │   ┌─────────────────┐                                           │   │
-│  │   │ Gait Scheduler   │◄── 步态周期管理                            │   │
-│  │   │                  │    · 双支撑/单支撑/摆动调度                 │   │
-│  │   │ · FSM状态机      │    · 占空比调整                            │   │
-│  │   │ · 相位管理       │                                           │   │
-│  │   └────────┬────────┘                                           │   │
-│  │            │ contact_schedule                                   │   │
-│  │            ▼                                                    │   │
-│  │   ┌─────────────────┐                                           │   │
-│  │   │ Contact Estimator│◄── JointState（关节力矩）                  │   │
-│  │   │                  │    · 逆动力学估计接触力                     │   │
-│  │   │ · 逆动力学        │    · 触地/离地事件检测                      │   │
-│  │   │ · 阈值检测       │                                           │   │
-│  │   └────────┬────────┘                                           │   │
-│  │            │ contact_forces                                     │   │
-│  │            ▼                                                    │   │
-│  │   ┌─────────────────┐     ┌─────────────────┐                   │   │
-│  │   │  RL Policy       │◄────│ Reference Gen   │                   │   │
-│  │   │                  │     │                  │                   │   │
-│  │   │ · ONNX Runtime   │     │ · 速度→期望轨迹  │                   │   │
-│  │   │ · MLP推理        │     │ · 足端摆动轨迹   │                   │   │
-│  │   │ · 输出期望力矩   │     │ · CoM目标位置    │                   │   │
-│  │   └────────┬────────┘     └─────────────────┘                   │   │
-│  │            │ desired_forces                                     │   │
-│  │            ▼                                                    │   │
-│  │   ┌──────────────────────────────────────────────────────────┐  │   │
-│  │   │              Whole Body Controller (WBC)                  │  │   │
-│  │   │                                                           │  │   │
-│  │   │ · QP求解器 (OSQP)                                         │  │   │
-│  │   │ · 目标：跟踪RL期望力矩 + 零角动量                         │  │   │
-│  │   │ · 约束：摩擦锥 + 力矩限 + 关节限 + 接触互补               │  │   │
-│  │   │                                                           │  │   │
-│  │   └────────┬─────────────────────────────────────────────────┘  │   │
-│  │            │ joint_torques                                      │   │
-│  │            ▼                                                    │   │
-│  │   ┌──────────────────────────────────────────────────────────┐  │   │
-│  │   │ Output: JointCommand (下肢关节) + LowerBodyStatus         │  │   │
-│  │   └──────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   Balance Monitor                                │   │
-│  │   · CoM投影检查（是否在支撑多边形内）                            │   │
-│  │   · 角动量检查                                                   │   │
-│  │   · 倾倒检测 → 触发 FALLING_RECOVERY                            │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph BipedalPlugin["LC Plugin (lc_bipedal.so)"]
+        subgraph Pipeline["LC Control Pipeline (1kHz)"]
+            Input["Input: BaseState + LocomotionCommand + JointState"]
+            Estimator["State Estimator<br/>· 足端FK / 支撑多边形<br/>· 补充BaseState细化"]
+            Gait["Gait Scheduler<br/>· FSM状态机 / 相位管理<br/>· 双支撑/单支撑/摆动调度"]
+            Contact["Contact Estimator<br/>· 逆动力学 / 阈值检测<br/>· 触地/离地事件检测"]
+            RL["RL Policy<br/>· ONNX Runtime / MLP推理"]
+            RefGen["Reference Gen<br/>· 速度→期望轨迹<br/>· 足端摆动轨迹 / CoM目标"]
+            WBC["Whole Body Controller (WBC)<br/>· QP求解器 (OSQP)<br/>· 目标：跟踪RL期望力矩 + 零角动量<br/>· 约束：摩擦锥 + 力矩限 + 关节限 + 接触互补"]
+            Output["Output: JointCommand + LowerBodyStatus"]
+
+            Input --> Estimator --> Gait --> Contact --> RL --> WBC --> Output
+            RefGen --> RL
+        end
+
+        Monitor["Balance Monitor<br/>· CoM投影检查<br/>· 角动量检查 / 倾倒检测<br/>→ 触发 FALLING_RECOVERY"]
+    end
 ```
 
 #### 5.1.2 轮式实现（lc_wheeled.so）架构
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     LC Plugin (lc_wheeled.so)                           │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   LC Control Pipeline (1kHz)                     │   │
-│  │                                                                  │   │
-│  │  Input: BaseState + LocomotionCommand + JointState               │   │
-│  │                                                                  │   │
-│  │   ┌──────────────────────────────────────────────────────────┐  │   │
-│  │   │              Chassis Controller                           │  │   │
-│  │   │                                                           │  │   │
-│  │   │ · 差速模型：vx, yaw_rate → wheel_left_vel, wheel_right_vel│  │   │
-│  │   │ · vy 通过轮速差实现（全向底盘时）或忽略（差速底盘时）     │  │   │
-│  │   │ · PID 速度环 + 前馈                                       │  │   │
-│  │   │ · 输出：wheel_left, wheel_right 关节指令                  │  │   │
-│  │   └────────┬─────────────────────────────────────────────────┘  │   │
-│  │            │                                                    │   │
-│  │   ┌────────▼────────┐                                           │   │
-│  │   │ Lift Column Ctrl │◄── MC运动模式/操作指令                    │   │
-│  │   │                  │    · OPERATING模式时允许调整高度           │   │
-│  │   │ · PID位置环      │    · 其他模式保持当前高度                  │   │
-│  │   │ · 力矩限幅       │                                           │   │
-│  │   │ · 行程软限位     │                                           │   │
-│  │   └────────┬────────┘                                           │   │
-│  │            │                                                    │   │
-│  │   ┌────────▼────────┐                                           │   │
-│  │   │ Caster Monitor   │◄── JointState（脚轮关节编码器）            │   │
-│  │   │                  │    · 监测脚轮转向角                        │   │
-│  │   │ · 转向角范围检查  │    · 被动脚轮，无主动控制                   │   │
-│  │   │ · 卡死检测       │    · 卡死时上报warning                     │   │
-│  │   └────────┬────────┘                                           │   │
-│  │            │                                                    │   │
-│  │   ┌────────▼──────────────────────────────────────────────────┐  │   │
-│  │   │ Output: JointCommand (轮+升降柱+脚轮) + LowerBodyStatus   │  │   │
-│  │   └───────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph WheeledPlugin["LC Plugin (lc_wheeled.so)"]
+        subgraph Pipeline["LC Control Pipeline (1kHz)"]
+            Input["Input: BaseState + LocomotionCommand + JointState"]
+            Chassis["Chassis Controller<br/>· 差速模型：vx, yaw_rate → wheel velocities<br/>· PID速度环 + 前馈<br/>· 输出 wheel_left, wheel_right"]
+            Lift["Lift Column Ctrl<br/>· PID位置环 / 力矩限幅 / 行程软限位<br/>· OPERATING模式允许调整高度"]
+            Caster["Caster Monitor<br/>· 转向角范围检查 / 卡死检测<br/>· 被动脚轮监测"]
+            Output["Output: JointCommand + LowerBodyStatus"]
+
+            Input --> Chassis --> Lift --> Caster --> Output
+        end
+    end
 ```
 
 ### 5.2 关键组件设计
@@ -1012,63 +903,63 @@ LC 错误码范围：**6001–6013**（与 MC 3000 段、PnC 4000 段、UC 5000 
 
 ```
 lc_bipedal/
-├── include/lc_bipedal/
-│   ├── lc_plugin.hpp              # LowerBodyController 实现类
-│   ├── rl_policy.hpp              # RL 策略推理器（ONNX Runtime 封装）
-│   ├── wbc_controller.hpp         # QP-based 全身控制器
-│   ├── contact_estimator.hpp      # 逆动力学接触估计器
-│   ├── gait_scheduler.hpp         # 步态 FSM 调度器
-│   ├── reference_generator.hpp    # 参考轨迹生成器
-│   ├── state_estimator.hpp        # 下肢状态估计（足端 FK、支撑多边形）
-│   ├── balance_monitor.hpp        # 平衡/倾倒监测器
-│   └── utils.hpp                  # 工具函数（逆动力学、摩擦锥投影等）
-├── src/
-│   ├── lc_plugin.cpp
-│   ├── rl_policy.cpp
-│   ├── wbc_controller.cpp
-│   ├── contact_estimator.cpp
-│   ├── gait_scheduler.cpp
-│   ├── reference_generator.cpp
-│   ├── state_estimator.cpp
-│   ├── balance_monitor.cpp
-│   └── utils.cpp
-├── config/
-│   └── lc_bipedal_params.yaml
-├── test/
-│   ├── test_rl_policy.cpp         # RL 推理单元测试
-│   ├── test_wbc_controller.cpp    # WBC 求解单元测试
-│   ├── test_contact_estimator.cpp # 接触估计单元测试
-│   ├── test_gait_scheduler.cpp    # 步态调度单元测试
-│   ├── test_balance_monitor.cpp   # 平衡监测单元测试
-│   └── test_integration.cpp       # 集成测试（含 mock MC）
-├── model/
-│   ├── policy.onnx                # RL 策略 ONNX 模型
-│   └── leg_dynamics.yaml          # 腿部动力学参数（URDF 导出）
-├── CMakeLists.txt
-└── package.xml
+- include/lc_bipedal/
+    - lc_plugin.hpp              # LowerBodyController 实现类
+    - rl_policy.hpp              # RL 策略推理器（ONNX Runtime 封装）
+    - wbc_controller.hpp         # QP-based 全身控制器
+    - contact_estimator.hpp      # 逆动力学接触估计器
+    - gait_scheduler.hpp         # 步态 FSM 调度器
+    - reference_generator.hpp    # 参考轨迹生成器
+    - state_estimator.hpp        # 下肢状态估计（足端 FK、支撑多边形）
+    - balance_monitor.hpp        # 平衡/倾倒监测器
+    - utils.hpp                  # 工具函数（逆动力学、摩擦锥投影等）
+- src/
+    - lc_plugin.cpp
+    - rl_policy.cpp
+    - wbc_controller.cpp
+    - contact_estimator.cpp
+    - gait_scheduler.cpp
+    - reference_generator.cpp
+    - state_estimator.cpp
+    - balance_monitor.cpp
+    - utils.cpp
+- config/
+    - lc_bipedal_params.yaml
+- test/
+    - test_rl_policy.cpp         # RL 推理单元测试
+    - test_wbc_controller.cpp    # WBC 求解单元测试
+    - test_contact_estimator.cpp # 接触估计单元测试
+    - test_gait_scheduler.cpp    # 步态调度单元测试
+    - test_balance_monitor.cpp   # 平衡监测单元测试
+    - test_integration.cpp       # 集成测试（含 mock MC）
+- model/
+    - policy.onnx                # RL 策略 ONNX 模型
+    - leg_dynamics.yaml          # 腿部动力学参数（URDF 导出）
+- CMakeLists.txt
+- package.xml
 
 lc_wheeled/
-├── include/lc_wheeled/
-│   ├── lc_plugin.hpp              # LowerBodyController 实现类
-│   ├── chassis_controller.hpp     # 差速底盘控制器
-│   ├── lift_controller.hpp        # 升降柱位置控制器
-│   ├── caster_monitor.hpp         # 脚轮状态监测器
-│   └── utils.hpp                  # 工具函数
-├── src/
-│   ├── lc_plugin.cpp
-│   ├── chassis_controller.cpp
-│   ├── lift_controller.cpp
-│   ├── caster_monitor.cpp
-│   └── utils.cpp
-├── config/
-│   └── lc_wheeled_params.yaml
-├── test/
-│   ├── test_chassis_controller.cpp
-│   ├── test_lift_controller.cpp
-│   ├── test_caster_monitor.cpp
-│   └── test_integration.cpp
-├── CMakeLists.txt
-└── package.xml
+- include/lc_wheeled/
+    - lc_plugin.hpp              # LowerBodyController 实现类
+    - chassis_controller.hpp     # 差速底盘控制器
+    - lift_controller.hpp        # 升降柱位置控制器
+    - caster_monitor.hpp         # 脚轮状态监测器
+    - utils.hpp                  # 工具函数
+- src/
+    - lc_plugin.cpp
+    - chassis_controller.cpp
+    - lift_controller.cpp
+    - caster_monitor.cpp
+    - utils.cpp
+- config/
+    - lc_wheeled_params.yaml
+- test/
+    - test_chassis_controller.cpp
+    - test_lift_controller.cpp
+    - test_caster_monitor.cpp
+    - test_integration.cpp
+- CMakeLists.txt
+- package.xml
 ```
 
 > **编译输出**：
@@ -1125,8 +1016,8 @@ Input: obs (dim=48)
   → Linear(256, 256) → ReLU
   → Linear(256, 128) → ReLU
   → Split:
-      ├── Linear(128, 12)  → tanh → action_mean (位置偏移)
-      └── Linear(128, 12)  → softplus → action_std (对角协方差)
+      - Linear(128, 12)  → tanh → action_mean (位置偏移)
+      - Linear(128, 12)  → softplus → action_std (对角协方差)
 ```
 
 **部署推理**（推理时只需 `action_mean`）：

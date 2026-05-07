@@ -162,20 +162,19 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    HalLidarNode                              │
-├─────────────────────────────────────────────────────────────┤
-│  LivoxDriver                                                 │
-│  ├─ Livox SDK wrapper (livox_ros_driver2)                   │
-│  ├─ PointCloud converter (LivoxCustomMsg → PointCloud2)     │
-│  └─ Timestamp synchronizer                                  │
-├─────────────────────────────────────────────────────────────┤
-│  MonitorThread                                               │
-│  ├─ Temperature monitor                                     │
-│  ├─ Scan rate monitor                                       │
-│  └─ Auto-recovery on fault                                  │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HalLidarNode
+        LivoxDriver["LivoxDriver"]
+        SDK["Livox SDK wrapper (livox_ros_driver2)"]
+        PCConv["PointCloud converter (LivoxCustomMsg → PointCloud2)"]
+        TS["Timestamp synchronizer"]
+        Monitor["MonitorThread"]
+
+        LivoxDriver --> SDK
+        LivoxDriver --> PCConv
+        LivoxDriver --> TS
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -249,29 +248,29 @@ string message
 
 ```
 hal_lidar_msgs/
-├── msg/
-│   ├── LidarDeviceState.msg
-│   ├── Heartbeat.msg
-│   └── ErrorCode.msg               # 错误码（原名 HalLidarErrorCode.msg）
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── StartScanning.srv
-│   ├── StopScanning.srv
-│   └── SetScanMode.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        LidarDeviceState.msg
+        Heartbeat.msg
+        ErrorCode.msg               # 错误码（原名 HalLidarErrorCode.msg）
+    srv/
+        GetHealthStatus.srv
+        StartScanning.srv
+        StopScanning.srv
+        SetScanMode.srv
+    CMakeLists.txt
+    package.xml
 
 hal_lidar/
-├── include/hal_lidar/
-│   └── hal_lidar_node.hpp
-├── src/
-│   └── hal_lidar_node.cpp
-├── config/
-│   └── hal_lidar_params.yaml
-├── launch/
-│   └── hal_lidar.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/hal_lidar/
+        hal_lidar_node.hpp
+    src/
+        hal_lidar_node.cpp
+    config/
+        hal_lidar_params.yaml
+    launch/
+        hal_lidar.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ## 11. 关键性能指标（KPI）

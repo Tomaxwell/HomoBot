@@ -13,7 +13,7 @@
 2. **运动模式管理**：维护形态无关的运动模式状态机，协调 UC/LC 的模式切换
 3. **指令仲裁与聚合**：接收多来源运动指令，仲裁冲突，聚合 UC/LC 关节指令后统一下发
 4. **全身状态估计**：融合 IMU + 关节状态，估计基座姿态和质心状态，供插件使用
-5. **安全校验**：运动指令前检查 SM 状态缓存，关节限位，E-Stop 时同时切断 UC/LC
+5. **安全校验**：运动指令前检查 SM 状态缓存，关节限位，E-Stop 时冻结状态、捕获失效数据、再切断 UC/LC
 6. **EtherCAT 统一出口**：作为唯一向 HAL_EtherCAT 下发关节指令的模块
 
 **与相邻模块的边界**：
@@ -28,7 +28,9 @@
 | MC ↔ MS | 接收流式运动意图 | 运动指令流式整形 |
 | MC ↔ MP | 接收预录动作序列 | 动作序列管理、插值 |
 | MC ↔ TE | 接收任务级运动指令（通过 Action） | 任务调度、生命周期管理 |
-| MC ↔ HDS | 上报关节健康数据、插件健康状态 | 故障诊断与定级 |
+| MC ↔ HDS | 上报关节健康数据、插件健康状态、失效诊断 | 故障诊断与定级 |
+| MC ↔ DR | 发送 FailureCaptureBuffer 数据、失效上下文 | 数据录制与存储 |
+| MC ↔ Data Rule Engine | 失效事件触发规则引擎采集 | 规则解析与触发执行 |
 
 **形态适配说明**：
 
@@ -66,49 +68,44 @@ MC 维护独立的运动模式状态机，与 SM 的全局状态解耦。SM 状�
 
 ### 2.2 运动模式状态转换图
 
-```
-                              SM: ACTIVE_STAND
-                                   │
-                                   ▼
-┌─────────┐    enable      ┌─────────────┐
-│  IDLE   │───────────────►│    STAND    │
-└────┬────┘                └──────┬──────┘
-     │                            │
-     │ disable                    │ prepare
-     │                            ▼
-     │                      ┌─────────────┐
-     │                      │    READY    │
-     │                      └──────┬──────┘
-     │                            │
-     │    ┌───────────────────────┼───────────────────────┐
-     │    │                       │                       │
-     │    ▼                       ▼                       ▼
-     │ ┌────────┐           ┌──────────┐          ┌────────────┐
-     │ │ SQUAT  │◄─────────►│  MOTION  │◄────────►│  WALKING   │
-     │ └───┬────┘           └────┬─────┘          └─────┬──────┘
-     │     │                     │                      │
-     │     │ sit                 │                      │
-     │     ▼                     │                      │
-     │  ┌──────┐                 │                      │
-     │  │ SIT  │─────────────────┘                      │
-     │  └──────┘                                        │
-     │     │                                            │
-     │     └────────────────────────────────────────────┘
-     │         ▲                                        │
-     │         └────────────────────────────────────────┘
-     │              SM: ACTIVE_OPERATING
-     │                   ▼
-     │              ┌──────────┐
-     │              │ OPERAT.  │
-     │              └──────────┘
-     │
-     └──────────────────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> STAND : enable
+    STAND --> IDLE : disable
+    STAND --> READY : prepare
 
-    SM: ACTIVE_ZERO_TORQUE ──► ZERO_TORQUE
-    SM: ACTIVE_DAMPING ──────► DAMPING
+    READY --> SQUAT
+    READY --> MOTION
+    READY --> WALKING
 
-    任意运动模式 ──e_stop──► IDLE（关节刹车/锁定）
-    任意运动模式 ──fault──► IDLE（关节锁定）
+    SQUAT --> MOTION
+    MOTION --> SQUAT
+    MOTION --> WALKING
+    WALKING --> MOTION
+
+    SQUAT --> SIT : sit
+    SIT --> MOTION
+    SIT --> WALKING
+
+    note right of READY
+        SM: ACTIVE_OPERATING → OPERATING
+    end note
+
+    note right of STAND
+        SM: ACTIVE_ZERO_TORQUE → ZERO_TORQUE
+        SM: ACTIVE_DAMPING → DAMPING
+    end note
+
+    STAND --> IDLE : e_stop / fault
+    READY --> IDLE : e_stop / fault
+    SQUAT --> IDLE : e_stop / fault
+    SIT --> IDLE : e_stop / fault
+    MOTION --> IDLE : e_stop / fault
+    WALKING --> IDLE : e_stop / fault
+    OPERATING --> IDLE : e_stop / fault
+    ZERO_TORQUE --> IDLE : e_stop / fault
+    DAMPING --> IDLE : e_stop / fault
 ```
 
 ### 2.3 控制模式枚举
@@ -440,6 +437,7 @@ string current_phase           # 当前执行阶段
 |------|------|------|-----|------|------|
 | `/mc/mc_state` | `mc_msgs/msg/McState` | MC → ALL | Reliable + Volatile, Depth 1 | 事件驱动 | MC 运动/控制模式状态 |
 | `/mc/whole_body_state` | `mc_msgs/msg/WholeBodyState` | MC → ALL | Best Effort, Depth 1 | 1kHz | 全身状态（质心、足端/底盘、上肢末端、关节）|
+| `/mc/failure_context` | `mc_msgs/msg/FailureContext` | MC → DR | Reliable + Volatile, Depth 1 | 事件驱动 | 失效上下文（冻结的 N 周期完整状态） |
 | `/mc/heartbeat` | `mc_msgs/msg/Heartbeat` | MC → EM/HDS | Reliable + Volatile, Depth 1 | 1Hz | MC 心跳 |
 | `/hal_ethercat/joint_commands` | `hal_ethercat_msgs/msg/JointCommand` | MC → HAL | Best Effort, Depth 1 | 1kHz | 聚合后的关节指令（唯一出口）|
 
@@ -477,97 +475,38 @@ string current_phase           # 当前执行阶段
 
 ### 4.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     MotionControlNode (MC 协调器)                       │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │              Control Loop (协调层, 1kHz)                         │   │
-│  │   SCHED_FIFO 实时线程，与 ROS2 回调线程隔离                       │   │
-│  │                                                                 │   │
-│  │  ┌──────────────────────────────────────────────────────────┐  │   │
-│  │  │                State Estimator (全身状态估计)               │  │   │
-│  │  │  · IMU + 关节编码器融合 → 基座姿态                         │  │   │
-│  │  │  · 质心位置/速度估计                                       │  │   │
-│  │  │  · 输出: BaseState (共享内存, 零拷贝)                       │  │   │
-│  │  └──────────────────────────────────────────────────────────┘  │   │
-│  │                         │                                       │   │
-│  │                         ▼                                       │   │
-│  │  ┌──────────────────────┐  ┌────────────────────────────────┐  │   │
-│  │  │   UC Plugin          │  │   LC Plugin                     │  │   │
-│  │  │   (Upper Body Ctrl)  │  │   (Lower Body Controller)       │  │   │
-│  │  │                      │  │                                 │  │   │
-│  │  │  输入:               │  │  输入:                          │  │   │
-│  │  │  · BaseState         │◄─┤· BaseState                      │  │   │
-│  │  │  · LowerBodyStatus   │  │  · LocomotionCommand            │  │   │
-│  │  │  · EndEffectorCmd    │  │  · JointState                   │  │   │
-│  │  │  · JointState        │  │                                 │  │   │
-│  │  │                      │  │  输出:                          │  │   │
-│  │  │  输出:               │  │  · JointCommand (下肢关节)       │  │   │
-│  │  │  · JointCommand      │  │  · LowerBodyStatus              │  │   │
-│  │  │    (上肢关节)        │  │    (步态/底盘状态)               │  │   │
-│  │  │  · UpperBodyStatus   │  │                                 │  │   │
-│  │  │                      │  │  足式实现: lc_bipedal.so         │  │   │
-│  │  │  实现: uc_common.so  │  │  · RL Policy + WBC              │  │   │
-│  │  │  · IK / 轨迹规划      │  │  · 步态调度 + 接触估计           │  │   │
-│  │  │  · 末端力控           │  │                                 │  │   │
-│  │  │  · 夹爪/手控          │  │  轮式实现: lc_wheeled.so        │  │   │
-│  │  │                      │  │  · 底盘速度/转向控制             │  │   │
-│  │  └──────────────────────┘  │  · 升降柱高度控制                │  │   │
-│  │           │                └────────────────────────────────┘  │   │
-│  │           │                          │                        │   │
-│  │           └──────────────┬───────────┘                        │   │
-│  │                          ▼                                    │   │
-│  │  ┌──────────────────────────────────────────────────────────┐  │   │
-│  │  │              Command Aggregator (指令聚合器)               │  │   │
-│  │  │  · 按 joint_assignment 合并 UC/LC 关节指令                │  │   │
-│  │  │  · 接收 MP/MS 外部关节目标（MotionTarget），override 插件输出 │  │   │
-│  │  │  · 检测关节归属冲突（同一关节被多方控制）                  │  │   │
-│  │  │  · 应用 control_mode 转换                                 │  │   │
-│  │  └──────────────────────────────────────────────────────────┘  │   │
-│  │                          │                                    │   │
-│  │                          ▼                                    │   │
-│  │  ┌──────────────────────────────────────────────────────────┐  │   │
-│  │  │              Safety Guardian (安全守护)                    │  │   │
-│  │  │  · SM 状态校验（本地原子变量）                             │  │   │
-│  │  │  · 关节限位检查（全部关节）                                │  │   │
-│  │  │  · 力矩饱和检查                                           │  │   │
-│  │  │  · 平衡/稳定检测                                          │  │   │
-│  │  │  · E-Stop 响应（< 1ms）                                   │  │   │
-│  │  └──────────────────────────────────────────────────────────┘  │   │
-│  │                          │                                    │   │
-│  │                          ▼                                    │   │
-│  │  ┌──────────────────────────────────────────────────────────┐  │   │
-│  │  │         Joint Command Encoder                            │  │   │
-│  │  │         → 写入无锁队列 → HAL_EtherCAT                    │  │   │
-│  │  └──────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                  ROS2 Callback Thread                           │   │
-│  │                                                                 │   │
-│  │  Subscribers: /sm/robot_state, /pnc/velocity_command,          │   │
-│  │             /mc/motion_target, /ms/motion_target, ...          │   │
-│  │  Publishers: /mc/mc_state, /mc/whole_body_state, ...           │   │
-│  │  Services: set_motion_mode, set_control_mode, ...              │   │
-│  │  Action Server: execute_motion                                 │   │
-│  │                                                                 │   │
-│  │  ┌─────────────────────────────────────────────────────────┐   │   │
-│  │  │              Motion Mode Manager                        │   │   │
-│  │  │  · 维护运动模式状态机                                    │   │   │
-│  │  │  · 响应 SM 状态变化切换模式                              │   │   │
-│  │  │  · 通知 UC/LC 插件模式变化                               │   │   │
-│  │  └─────────────────────────────────────────────────────────┘   │   │
-│  │                                                                 │   │
-│  │  ┌─────────────────────────────────────────────────────────┐   │   │
-│  │  │              Plugin Manager                             │   │   │
-│  │  │  · 根据 robot_type 加载 LC 插件                         │   │   │
-│  │  │  · 加载 UC 插件（形态无关）                              │   │   │
-│  │  │  · 监控插件健康（心跳、更新延迟）                         │   │   │
-│  │  │  · 插件异常时触发降级（safe mode）                        │   │   │
-│  │  └─────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph MC["MotionControlNode"]
+        subgraph CL["Control Loop (1kHz, SCHED_FIFO)"]
+            SE["State Estimator"]
+            UC["UC Plugin (uc_common.so)"]
+            LC["LC Plugin (lc_bipedal / lc_wheeled)"]
+            CA["Command Aggregator"]
+            SG["Safety Guardian"]
+            FCB["FailureCaptureBuffer"]
+            JCE["Joint Command Encoder"]
+        end
+
+        subgraph ROS2T["ROS2 Callback Thread"]
+            MMM["Motion Mode Manager"]
+            PM["Plugin Manager"]
+        end
+    end
+
+    SE --> UC
+    SE --> LC
+    UC --> CA
+    LC --> CA
+    CA --> SG
+    SG --> FCB
+    FCB --> JCE
+    JCE --> HAL["HAL_EtherCAT"]
+
+    MMM --> UC
+    MMM --> LC
+    PM --> UC
+    PM --> LC
 ```
 
 ### 4.2 插件接口定义（C++）
@@ -758,17 +697,24 @@ EM 启动 MC 进程
 #### 4.4.3 E-Stop 响应流程
 
 ```
-HAL_EtherCAT 检测到 EMCY 紧急帧
+HAL_EtherCAT 检测到 EMCY 紧急帧 或 MC 内部检测到异常
   → 发布 /hal_ethercat/emergency_frame
   → MC 订阅收到（ROS2 回调线程）
   → 设置原子变量 estop_triggered = true
   → 实时线程下一周期读取到 estop_triggered
-  → 立即将所有关节 effort = 0（< 1ms）
+  → **步骤1：冻结 FailureCaptureBuffer（保存最近 N 周期完整状态）**
+  → **步骤2：将 FailureCaptureBuffer 通过共享内存直接写入 DR 预分配缓冲区**
+  →     （绕过 ROS2 发布，避免 MC 崩溃导致数据丢失）
+  → **步骤3：异步发布 FailureContext 到 /dr/failure_context Topic**
+  →     （供其他模块订阅，不阻塞实时线程）
+  → **步骤4：执行安全回退（回退到最近安全状态/站立姿态）**
   → 调用 uc_plugin->emergency_stop()
   → 调用 lc_plugin->emergency_stop()
+  → 将所有关节 effort = 0（< 1ms）
   → 触发关节刹车（通过刹车控制 GPIO）
   → 异步调用 /sm/trigger_estop 通知 SM
   → MC 运动模式切换为 IDLE
+  → 自动标记失效类型（根据 HDS 诊断结果或 MC 内部检测）
 ```
 
 > **安全约束**：E-Stop 响应**不依赖插件**，MC 协调层直接切断 EtherCAT 输出。插件的 `emergency_stop()` 仅用于清理内部状态，不能阻塞或失败。
@@ -879,6 +825,8 @@ MP 插值生成一帧关节目标 / MS 整形输出一帧关节目标
 | HDS | MC → HDS | `/hds/health_report` (Topic) | 关节健康数据、插件状态上报 |
 | HDS | MC → HDS | `/mc/heartbeat` (Topic) | 心跳 |
 | DR | MC → DR | `/mc/whole_body_state` (Topic) | 全身状态记录 |
+| DR | MC → DR | `/mc/failure_context` (Topic) | 失效上下文（FailureCaptureBuffer）|
+| Data Rule Engine | MC → DRE | `/data_rule_engine/rule_trigger_event` (Topic) | 失效事件触发规则采集 |
 | Perception | Perception → MC | `/perception/terrain_info` (Topic) | 地形信息（可选，透传给 LC）|
 | Gateway | Gateway → MC | `/mc/set_control_mode` (Service) | 调试时切换控制模式 |
 
@@ -1015,6 +963,10 @@ motion_control:
 | 3013 | `ERR_ESTOP_ACTIVE` | 急停激活中，拒绝运动请求 | HIGH |
 | 3014 | `ERR_PLUGIN_MISMATCH` | 插件与形态不匹配（如 wheeled 加载 lc_bipedal）| CRITICAL |
 | 3015 | `ERR_COMMAND_AGGREGATION` | 指令聚合冲突（UC/LC 争抢同一关节）| CRITICAL |
+| 3016 | `ERR_FAILURE_CAPTURE_FAIL` | FailureCaptureBuffer 冻结/写入失败 | HIGH |
+| 3017 | `ERR_FAILURE_CONTEXT_SEND_FAIL` | 失效上下文发送到 DR 失败 | MEDIUM |
+| 3018 | `ERR_RECOVERY_FAIL` | 从失效状态回退失败 | HIGH |
+| 3019 | `ERR_FALL_DETECTED` | 跌倒检测触发（足式）| CRITICAL |
 
 ---
 
@@ -1052,76 +1004,98 @@ motion_control:
 - 插件异常（update 返回 false）不直接导致系统崩溃，进入降级模式
 - 插件加载失败（init 返回 false）时 MC 拒绝启动，避免半初始化状态
 
-### 8.5 E-Stop 响应
+### 8.5 E-Stop 响应与失效捕获
 
-- EMCY 紧急帧 → 实时线程下一周期内 effort = 0（< 1ms）
-- 不依赖 ROS2 通信，不调用阻塞 Service
+- EMCY 紧急帧 → 实时线程下一周期内：
+  1. 冻结 FailureCaptureBuffer（保存最近 N=1000 周期完整状态，约 1s）
+  2. 将 FailureCaptureBuffer 封装为 FailureContext → 通过无锁队列传递给 ROS2 发布线程
+  3. effort = 0（< 1ms）
+- 不依赖 ROS2 通信做急停决策，不调用阻塞 Service
 - 不依赖插件响应，MC 协调层直接切断输出
+- FailureCaptureBuffer 写入 DR 后，才允许电机完全断电
+
+### 8.6 失效恢复流程（新增）
+
+```
+失效状态解除（SM 从 FAULT 恢复）
+  → MC 接收到恢复信号
+  → 检查 FailureCaptureBuffer 中保存的失效前状态
+  → 若状态安全（关节未超限、姿态稳定）：
+      → 加载失效前状态作为初始状态
+      → 进入 MC_MODE_READY
+      → 逐步恢复控制（软启动，避免力矩冲击）
+      → 通知 DR 恢复过程已记录
+  → 若状态不安全：
+      → 保持 MC_MODE_IDLE
+      → 等待人工干预
+      → 上报 HDS（WARNING：失效状态不安全，无法自动恢复）
+```
 
 ---
 
 ## 9. 包结构
 
-```
 mc_msgs/
-├── msg/
-│   ├── McState.msg               # MC 运动/控制模式状态
-│   ├── WholeBodyState.msg        # 全身状态（含足端/底盘/上肢末端）
-│   ├── McErrorCode.msg           # MC 错误码
-│   ├── Heartbeat.msg             # 心跳
-│   └── PluginStatus.msg          # 插件状态详情
-├── srv/
-│   ├── SetMotionMode.srv         # 设置运动模式
-│   ├── SetControlMode.srv        # 设置控制模式
-│   ├── GetMcState.srv            # 查询 MC 及插件状态
-│   └── GetHealthStatus.srv       # 健康查询
-├── action/
-│   └── ExecuteMotion.action      # 执行运动任务
-├── CMakeLists.txt
-└── package.xml
+- msg/
+    - McState.msg               # MC 运动/控制模式状态
+    - WholeBodyState.msg        # 全身状态（含足端/底盘/上肢末端）
+    - McErrorCode.msg           # MC 错误码
+    - FailureContext.msg        # 失效上下文（FailureCaptureBuffer 冻结数据）
+    - Heartbeat.msg             # 心跳
+    - PluginStatus.msg          # 插件状态详情
+- srv/
+    - SetMotionMode.srv         # 设置运动模式
+    - SetControlMode.srv        # 设置控制模式
+    - GetMcState.srv            # 查询 MC 及插件状态
+    - GetHealthStatus.srv       # 健康查询
+- action/
+    - ExecuteMotion.action      # 执行运动任务
+- CMakeLists.txt
+- package.xml
 
 mc/
-├── include/mc/
-│   ├── motion_control_node.hpp       # 主节点类
-│   ├── motion_mode_manager.hpp       # 运动模式管理
-│   ├── command_aggregator.hpp        # 指令聚合器
-│   ├── state_estimator.hpp           # 状态估计器（EKF）
-│   ├── safety_guardian.hpp           # 安全校验
-│   ├── plugin_manager.hpp            # 插件管理器
-│   ├── ros2_interface.hpp            # ROS2 接口层
-│   ├── realtime_thread.hpp           # 实时控制线程
-│   └── plugin_interface/
-│       ├── upper_body_controller.hpp   # UC 插件接口（纯虚类）
-│       ├── lower_body_controller.hpp   # LC 插件接口（纯虚类）
-│       └── controller_types.hpp        # 共享数据结构
-├── src/
-│   ├── motion_control_node.cpp
-│   ├── motion_mode_manager.cpp
-│   ├── command_aggregator.cpp
-│   ├── state_estimator.cpp
-│   ├── safety_guardian.cpp
-│   ├── plugin_manager.cpp
-│   ├── ros2_interface.cpp
-│   └── realtime_thread.cpp
-├── plugins/
-│   └── README.md                   # 插件开发指南
-├── test/
-│   ├── test_motion_mode_manager.cpp
-│   ├── test_command_aggregator.cpp
-│   ├── test_state_estimator.cpp
-│   ├── test_safety_guardian.cpp
-│   ├── test_plugin_manager.cpp
-│   └── test_integration.cpp        # 集成测试（含 mock 插件）
-├── config/
-│   ├── mc_params.yaml              # MC 主配置
-│   ├── uc_params.yaml              # UC 插件配置（预留）
-│   ├── lc_bipedal_params.yaml      # 足式 LC 插件配置（预留）
-│   └── lc_wheeled_params.yaml      # 轮式 LC 插件配置（预留）
-├── launch/
-│   └── mc.launch.py
-├── CMakeLists.txt
-└── package.xml
-```
+- include/mc/
+    - motion_control_node.hpp       # 主节点类
+    - motion_mode_manager.hpp       # 运动模式管理
+    - command_aggregator.hpp        # 指令聚合器
+    - state_estimator.hpp           # 状态估计器（EKF）
+    - safety_guardian.hpp           # 安全校验
+    - plugin_manager.hpp            # 插件管理器
+    - ros2_interface.hpp            # ROS2 接口层
+    - realtime_thread.hpp           # 实时控制线程
+    - failure_capture_buffer.hpp    # 失效捕获缓冲区
+    - plugin_interface/
+        - upper_body_controller.hpp   # UC 插件接口（纯虚类）
+        - lower_body_controller.hpp   # LC 插件接口（纯虚类）
+        - controller_types.hpp        # 共享数据结构
+- src/
+    - motion_control_node.cpp
+    - motion_mode_manager.cpp
+    - command_aggregator.cpp
+    - state_estimator.cpp
+    - safety_guardian.cpp
+    - plugin_manager.cpp
+    - ros2_interface.cpp
+    - realtime_thread.cpp
+    - failure_capture_buffer.cpp
+- plugins/
+    - README.md                   # 插件开发指南
+- test/
+    - test_motion_mode_manager.cpp
+    - test_command_aggregator.cpp
+    - test_state_estimator.cpp
+    - test_safety_guardian.cpp
+    - test_plugin_manager.cpp
+    - test_integration.cpp        # 集成测试（含 mock 插件）
+- config/
+    - mc_params.yaml              # MC 主配置
+    - uc_params.yaml              # UC 插件配置（预留）
+    - lc_bipedal_params.yaml      # 足式 LC 插件配置（预留）
+    - lc_wheeled_params.yaml      # 轮式 LC 插件配置（预留）
+- launch/
+    - mc.launch.py
+- CMakeLists.txt
+- package.xml
 
 > **插件代码位置**：UC/LC 插件作为独立包开发（如 `lc_bipedal/`、`lc_wheeled/`、`uc_common/`），编译为动态库后安装到系统 lib 目录或 MC 包内。MC 通过 `library_path` 参数加载。
 
@@ -1143,6 +1117,9 @@ mc/
 | MC 总 CPU 占用（含插件） | < 20%（单核）|
 | MC 总内存占用 | < 500MB（含插件模型）|
 | 插件加载时间 | < 2s |
+| FailureCaptureBuffer 冻结延迟 | < 100us（实时线程内）|
+| 失效上下文发布延迟 | < 10ms（ROS2 线程）|
+| 失效数据完整性 | 100%（最近 N=1000 周期无丢失）|
 
 ---
 

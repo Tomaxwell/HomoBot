@@ -12,9 +12,11 @@
 2. **命令转发**：接收并鉴权来自云端/APP的用户指令，转发至内部相应模块（SM、TE、Setting等）
 3. **状态上报**：聚合机器人全局状态、任务进度、健康数据，按策略上报云端
 4. **会话管理**：管理APP客户端连接会话，支持多客户端并发
-5. **OTA协调**：接收云端OTA指令，转发至FOTA模块执行
-6. **流量管控**：实施速率限制、熔断降级、重连退避策略
-7. **安全隔离**：TLS加密、Token鉴权、命令白名单、防重放攻击
+5. **数据资产上传管理**：Gateway 内部集成 DataUploader 子模块，统一管理数据资产上传的带宽配额、压缩加密、断点续传
+6. **OTA协调**：接收云端OTA指令，转发至FOTA模块执行
+7. **流量管控**：实施速率限制、熔断降级、重连退避策略
+8. **带宽隔离**：控制指令与数据上传带宽隔离，确保控制指令绝对优先
+9. **安全隔离**：TLS加密、Token鉴权、命令白名单、防重放攻击、数据脱敏
 
 **与相邻模块的边界**：
 
@@ -28,6 +30,8 @@
 | Gateway ↔ Agent | 转发语音/LLM指令；上报Agent状态 | VLA决策、技能执行 |
 | Gateway ↔ Setting | 转发配置修改请求；同步配置状态 | 参数持久化与验证 |
 | Gateway ↔ DR | 转发数据采集启停指令 | 数据记录与存储 |
+| Gateway ↔ Data Uploader | DataUploader 为 Gateway 内部子模块，不独立对外通信 | 带宽配额管理、上传调度 |
+| Gateway ↔ Data Rule Engine | 转发云端下发的采集规则 | 规则解析与触发执行 |
 
 ---
 
@@ -35,17 +39,37 @@
 
 Gateway 在端侧架构中的位置：
 
+```mermaid
+flowchart TB
+    Cloud["云端 / APP"]
+    GW["Gateway<br/>唯一通信出口"]
+
+    Cloud <-->|TLS/MQTT·WS·gRPC| GW
+
+    subgraph ROS["ROS2 域（Gateway 与下列模块对等交互，非串联流水线）"]
+        SM["SM"]
+        TE["TE"]
+        Agent["Agent"]
+        Setting["Setting"]
+        FOTA["FOTA"]
+        DR["DR"]
+        EM["EM"]
+        HDS["HDS"]
+    end
+
+    GW <-->|转发命令 / 订阅状态| SM
+    GW <-->|任务 / 进度| TE
+    GW <-->|指令 / 云代理| Agent
+    GW <-->|配置同步| Setting
+    GW <-->|OTA 协调| FOTA
+    GW <-->|采集指令| DR
+
+    SM <-.->|robot_state / 协同| EM
+    SM <-.->|状态订阅| HDS
+    TE <-.->|健康上报等| HDS
 ```
-┌─────────────────────────────────────────────┐
-│              云端平台 / APP                   │  ← 外部世界
-├─────────────────────────────────────────────┤
-│           Gateway（本模块）                   │  ← 唯一通信出口
-├─────────────────────────────────────────────┤
-│  SM    TE    Agent    Setting    FOTA   DR  │  ← 内部模块
-├─────────────────────────────────────────────┤
-│          EM    HDS                          │  ← 中间件层
-└─────────────────────────────────────────────┘
-```
+
+**与 Interaction 的边界**：Gateway 负责**链路与会话**（TLS、Token、APP 物理连接、云端 MQTT 等）；**交互层意图仲裁与多模态融合**由 Interaction 完成。APP 侧既有「控制面」命令可走 Gateway 直达 TE/SM，也有「交互内容」经 Interaction 标准化后再送 Agent——二者职责不重复：Gateway **不做**意图理解与对话状态机；Interaction **不做**公网出口与证书栈。
 
 **Gateway 不做的事情**（红线）：
 
@@ -53,7 +77,7 @@ Gateway 在端侧架构中的位置：
 - **不做故障定级** — 只上报原始数据，HDS负责定级
 - **不做运动控制** — 不直接下发关节指令，通过TE/SM转发
 - **不做业务逻辑执行** — 只负责通信转发，不执行具体任务
-- **不做本地数据持久化** — 配置持久化是Setting的职责
+- **不做配置类持久化** — 配置持久化是 Setting 的职责；断网遥测等仅允许**定长、加密、有上限的缓存队列**（见 §5.3.2），不等同于配置存储
 - **不绕过安全校验** — 所有命令必须经过鉴权和白名单检查
 
 ---
@@ -74,46 +98,25 @@ Gateway 在端侧架构中的位置：
 
 ### 3.2 状态转换图
 
-```
-                          ┌───────────────────────────────────────┐
-                          │                                       │
-                    ┌─────┴──────┐  init/start  ┌────────────────┴───┐
-              ┌──►  │ GW_DISCON  │─────────────►│   GW_CONNECTING    │
-              │     │    0       │              │        1           │
-              │     └────────────┘              └────────┬───────────┘
-              │           ▲                            │
-              │           │        timeout/fail        │ success
-              │           │    ┌───────────────────────┘
-              │           │    ▼
-              │           │  ┌──────────────────┐   auth_success   ┌──────────────┐
-              │           │  │ GW_AUTHENTICATING │────────────────►│ GW_CONNECTED │
-              │           │  │        2          │                 │      3       │
-              │           │  └────────┬─────────┘                 └──────┬───────┘
-              │           │           │ auth_fail                     │
-              │           │    ┌──────┘                               │ disconnect
-              │           │    ▼                                       │
-              │           │  ┌──────────────────┐◄─────────────────────┘
-              │           └──│  GW_RECONNECTING │    reconnect_policy
-              │              │        5         │──────────────────────┘
-              │              └──────────────────┘
-              │
-              │  ┌──────────────────────────────────────────────────────────────┐
-              │  │                                                              │
-              └──┤  rate_limit / cloud_block                                    │
-                 │         ▼                                                    │
-                 │    ┌─────────────┐  block_lifted  ┌─────────────────────────┘
-                 └───►│  GW_BLOCKED │───────────────►│
-                      │      6      │                │
-                      └─────────────┘                │
-                                                     │
-    high_latency / packet_loss                       │
-         ▼                                           │
-    ┌─────────────┐  quality_recovered   ┌───────────┘
-    │ GW_DEGRADED │◄─────────────────────┘
-    │      4      │
-    └──────┬──────┘
-           │  quality_worsen
-           └────────────────────────────────────────────────────────────────────► GW_RECONNECTING
+（状态名与 §3.1 枚举一致；进入 `GW_BLOCKED` 后须先回到 `GW_RECONNECTING` 再走握手，与 §3.3 表一致——不在封禁解除后「无握手」直接等价于长期在线会话。）
+
+```mermaid
+stateDiagram-v2
+    [*] --> GW_DISCONNECTED
+    GW_DISCONNECTED --> GW_CONNECTING : start_connect
+    GW_CONNECTING --> GW_AUTHENTICATING : tcp_tls_ok
+    GW_CONNECTING --> GW_RECONNECTING : handshake_timeout / fail
+    GW_AUTHENTICATING --> GW_CONNECTED : auth_success
+    GW_AUTHENTICATING --> GW_RECONNECTING : auth_fail
+    GW_CONNECTED --> GW_RECONNECTING : disconnect / heartbeat_timeout
+    GW_RECONNECTING --> GW_CONNECTING : backoff_elapsed
+    GW_RECONNECTING --> GW_DISCONNECTED : max_retries_exceeded
+    GW_CONNECTED --> GW_BLOCKED : rate_limit / cloud_block
+    GW_BLOCKED --> GW_RECONNECTING : block_lifted / cooldown_end
+    GW_CONNECTED --> GW_DEGRADED : high_latency / packet_loss
+    GW_DEGRADED --> GW_CONNECTED : quality_recovered
+    GW_DEGRADED --> GW_RECONNECTING : quality_worsen
+    GW_CONNECTED --> GW_DISCONNECTED : user_disconnect
 ```
 
 ### 3.3 状态转换表
@@ -130,8 +133,9 @@ Gateway 在端侧架构中的位置：
 | DEGRADED | RECONNECTING | 质量持续恶化 | 60 | 主动重建连接 |
 | CONNECTED | RECONNECTING | 网络断开/心跳超时 | 80 | 连接异常 |
 | CONNECTED | BLOCKED | 收到云端限流/封禁指令 | 70 | 服务端控制 |
-| BLOCKED | RECONNECTING | 封禁解除/退避结束 | 60 | 恢复尝试 |
+| BLOCKED | RECONNECTING | 封禁解除、冷却结束或需重新握手 | 60 | 与 §3.2 一致：不直连 CONNECTED |
 | RECONNECTING | CONNECTING | 退避结束，开始重连 | 60 | 重连流程 |
+| RECONNECTING | DISCONNECTED | 重连尝试耗尽 | 80 | 与 §3.2、§5.3.5 一致 |
 | * | DISCONNECTED | 用户主动断开 | 100 | 最高优先级 |
 
 ### 3.4 状态转换约束
@@ -145,6 +149,8 @@ Gateway 在端侧架构中的位置：
 ---
 
 ## 4. ROS2 接口定义
+
+以下 `Heartbeat.msg`、`GetHealthStatus.srv` 的**固定前缀字段**（顺序与类型）须符合仓库 **`design/interface_standards.md`**；Gateway 仅在标准字段后追加扩展字段。
 
 ### 4.1 消息定义 (msg)
 
@@ -170,8 +176,10 @@ string target_module        # 目标模块（"sm", "te", "setting", "fota", "dr"
 string command_type         # 命令类型（由目标模块定义）
 string payload_json         # 命令参数（JSON格式）
 builtin_interfaces/Time stamp       # 命令产生时间
-string auth_token           # 鉴权Token（Gateway校验后剥离）
+string auth_token           # 鉴权Token（仅入口解码使用；校验后不得进入对外 Topic）
 ```
+
+**`CommandEnvelope` 使用约束**：仅允许出现在 **Gateway 内部队列**或**指向 Gateway 的 Service 请求载荷**中；**禁止**将含 `auth_token` 的完整 `CommandEnvelope` 发布到任意可订阅 Topic。对外仅发布脱敏后的 `CommandResult` 或不含凭证的控制摘要。
 
 ```
 # gateway_msgs/msg/CommandResult.msg
@@ -192,12 +200,16 @@ builtin_interfaces/Time completed_at  # 完成时间
 builtin_interfaces/Time batch_time      # 批次时间戳
 uint32 sequence_num                     # 序列号（用于检测丢包）
 gateway_msgs/TelemetryItem[] items  # 遥测项列表
+```
 
-# TelemetryItem 定义：
-# string category       # 类别（"state", "health", "task", "motion", "sensor"）
-# string item_name      # 项名称
-# string value_json     # 值（JSON格式）
-# builtin_interfaces/Time sampled_at
+```
+# gateway_msgs/msg/TelemetryItem.msg
+# 单条遥测项（TelemetryBatch.items 元素类型）
+
+string category             # 类别（"state", "health", "task", "motion", "sensor"）
+string item_name            # 项名称
+string value_json           # 值（JSON）
+builtin_interfaces/Time sampled_at
 ```
 
 ```
@@ -227,6 +239,20 @@ bool authenticated          # 是否已认证
 ```
 
 ### 4.2 服务定义 (srv)
+
+```
+# gateway_msgs/srv/DeployRules.srv
+# 转发云端下发的数据采集规则至 Data Rule Engine。
+# 若 DRE 独立为 data_rule_engine_msgs 包，可将本定义迁移至该包；Gateway 仅作为客户端调用 /data_rule_engine/deploy_rules。
+
+string ruleset_id           # 规则集 ID
+string payload_json         # 规则体（JSON）
+string schema_version       # 规则 Schema 版本
+---
+bool success
+string message
+uint16 error_code
+```
 
 ```
 # gateway_msgs/srv/GetHealthStatus.srv
@@ -330,6 +356,12 @@ uint32 bytes_received
 | `/gateway/forward_command` | `gateway_msgs/srv/ForwardCommand` | Agent, TE | 请求转发到云端 |
 | `/gateway/request_ota_download` | `gateway_msgs/srv/RequestOtaDownload` | FOTA | 固件下载请求 |
 | `/gateway/get_connection_status` | `gateway_msgs/srv/GetConnectionStatus` | SM, EM | 连接状态查询 |
+| `/data_rule_engine/deploy_rules` | `gateway_msgs/srv/DeployRules` | Gateway（客户端）→ DRE（服务端） | 云端规则下发；srv 可迁至 `data_rule_engine_msgs`（§4.2） |
+
+#### QoS 与跨协议语义
+
+- **ROS2 侧**：发往云端前的聚合 Topic（如 `/gateway/telemetry_batch`）使用 **Reliable**，避免节点进程内丢批次。
+- **广域网侧**：MQTT/WebSocket 上可对非关键遥测采用**允许丢弃/降采样**策略；即「ROS Reliable」保证进程内不丢批，**不保证**广域网每一条遥测必达（与 §5.2 一致）。
 
 #### 内部订阅的Topics（用于收集上报数据）
 
@@ -347,49 +379,47 @@ uint32 bytes_received
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      GatewayNode                                     │
-│                                                                      │
-│  ┌──────────────────┐    ┌──────────────────┐                       │
-│  │  Cloud Connector │    │  Protocol Handler│                       │
-│  │  (云端连接管理)   │    │  (协议编解码)     │                       │
-│  │                  │    │                  │                       │
-│  │  - MQTT客户端    │    │  - MQTT序列化    │                       │
-│  │  - TLS管理       │    │  - gRPC序列化    │                       │
-│  │  - 心跳维持      │    │  - JSON编解码    │                       │
-│  │  - 重连逻辑      │    │  - 压缩/解压     │                       │
-│  └────────┬─────────┘    └────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼───────────────────────▼─────────┐                       │
-│  │         Connection State Manager          │                       │
-│  │   (连接状态机 + 质量监控 + 退避策略)       │                       │
-│  └────────┬───────────────────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼─────────┐   ┌─────────▼────────┐                       │
-│  │  Auth Manager    │   │  Rate Limiter    │                       │
-│  │  (Token鉴权)      │   │  (速率限制/熔断)  │                       │
-│  └────────┬─────────┘   └─────────┬────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼───────────────────────▼─────────┐                       │
-│  │         Command Router                    │                       │
-│  │   (命令路由 + 白名单校验 + 去重)          │                       │
-│  └────────┬───────────────────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼─────────┐   ┌─────────▼────────┐                       │
-│  │  Telemetry       │   │  Session Manager │                       │
-│  │  Aggregator      │   │  (APP会话管理)    │                       │
-│  │  (遥测聚合)       │   │                  │                       │
-│  │  - 数据收集       │   │  - 连接管理       │                       │
-│  │  - 批量压缩       │   │  - 多客户端       │                       │
-│  │  - 优先级队列     │   │  - 权限隔离       │                       │
-│  └────────┬─────────┘   └──────────────────┘                       │
-│           │                                                          │
-│  ┌────────▼─────────┐                                               │
-│  │  ROS2 Interface  │                                               │
-│  │  (Pub/Sub/Srv)   │                                               │
-│  └──────────────────┘                                               │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph GWNode["GatewayNode"]
+        CloudConn["Cloud Connector
+(云端连接管理)
+· MQTT客户端 / TLS管理 / 心跳维持 / 重连逻辑"]
+        Protocol["Protocol Handler
+(协议编解码)
+· MQTT序列化 / gRPC序列化 / JSON编解码 / 压缩解压"]
+        Uploader["DataAssetUploader
+(数据资产上传)
+· 带宽配额管理 / 分片上传协调 / 断点续传 / 脱敏策略"]
+        ConnMgr["Connection State Manager
+(连接状态机 + 质量监控 + 退避策略)"]
+        Auth["Auth Manager
+(Token鉴权)"]
+        RateLimit["Rate Limiter
+(速率限制/熔断)"]
+        Router["Command Router
+(命令路由 + 白名单校验 + 去重)"]
+        Telemetry["Telemetry Aggregator
+(遥测聚合)
+· 数据收集 / 批量压缩 / 优先级队列"]
+        Session["Session Manager
+(APP会话管理)
+· 连接管理 / 多客户端 / 权限隔离"]
+        ROS2IF["ROS2 Interface
+(Pub/Sub/Srv)"]
+
+        CloudConn --> ConnMgr
+        Protocol --> ConnMgr
+        ConnMgr --> Auth
+        ConnMgr --> RateLimit
+        Auth --> Router
+        RateLimit --> Router
+        Router --> Telemetry
+        Router --> Session
+        Telemetry --> ROS2IF
+        Session --> ROS2IF
+        Uploader --> CloudConn
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -401,7 +431,11 @@ uint32 bytes_received
    - **常规级**（0.2Hz）：健康数据、运动数据
    - **批量级**（按需）：日志、诊断数据
 4. **TLS双向认证**：Gateway到云端使用mTLS，APP到Gateway使用Token+签名
-5. **QoS分层**：控制命令使用Reliable，遥测数据使用Best Effort（可接受部分丢失）
+5. **QoS分层**：
+   - **ROS2 域内**：转发命令与聚合后的遥测批次 Topic 使用 **Reliable**，避免进程内无故丢命令/丢批。
+   - **广域网出口**：在 MQTT/WS 层可对遥测做**降采样、合并、Best Effort**以节省带宽；「允许部分丢失」指**跨网策略**，与 ROS Topic 的 Reliable 配置分层理解（见 §4.3）。
+6. **带宽隔离**：上行带宽分为控制指令预留（固定30%）和数据上传动态配额（剩余70%），Data Uploader 每次上传前申请配额
+7. **数据脱敏**：Gateway 在转发数据资产上传前执行脱敏策略检查（人脸/车牌模糊标记验证）
 
 ### 5.3 关键流程
 
@@ -442,6 +476,8 @@ Telemetry Aggregator 订阅内部Topics
     → 其他 → 存入本地队列（最多1000条），恢复后补发
 ```
 
+上述本地队列为**有界加密缓存**（见 §9.4），用于断网补发，**不是** Setting 类配置持久化。
+
 #### 5.3.3 OTA下载协调流程
 
 ```
@@ -457,7 +493,26 @@ FOTA调用 /gateway/request_ota_download
   → FOTA通过本地文件路径读取
 ```
 
-#### 5.3.4 连接断开自动恢复流程
+#### 5.3.4 带宽隔离与数据资产上传流程（新增）
+
+```
+Data Uploader 申请上传带宽配额
+  → Gateway 的 DataAssetUploader 评估当前带宽使用
+    → 计算控制指令当前占用带宽
+    → 可用带宽 = 总上行带宽 × 70% - 控制指令占用
+    → 按优先级分配：
+        → CRITICAL（故障数据）：立即分配，可抢占低优先级
+        → HIGH（训练数据）：正常分配
+        → NORMAL/LOW（日志/诊断）：闲时分配或拒绝
+  → 返回带宽配额给 Data Uploader
+    → Data Uploader 按配额速率上传
+    → 上传过程中 Gateway 持续监测控制指令带宽
+      → 控制指令带宽突增 → 通知 Data Uploader 降速/暂停
+      → 控制指令带宽下降 → 通知 Data Uploader 恢复/加速
+  → 上传完成后释放配额
+```
+
+#### 5.3.5 连接断开自动恢复流程
 
 ```
 心跳超时 detected
@@ -483,6 +538,7 @@ FOTA调用 /gateway/request_ota_download
 | 模块 | 方向 | 接口 | 说明 |
 |------|------|------|------|
 | SM | Gateway → SM | `/sm/request_transition` (Service) | 转发用户状态控制指令 |
+| SM | Gateway → SM | `/sm/trigger_estop` (Service) | 转发云端/APP 急停（`TriggerEStop`，优先级由 SM 仲裁） |
 | SM | SM → Gateway | `/sm/robot_state` (Topic) | Gateway订阅并上报云端 |
 | TE | Gateway → TE | `/te/create_task` (Service) | 转发任务指令 |
 | TE | TE → Gateway | `/te/task_state` (Topic) | Gateway订阅并上报任务进度 |
@@ -494,52 +550,59 @@ FOTA调用 /gateway/request_ota_download
 | Setting | Gateway → Setting | `/setting/set_parameter` (Service) | 转发配置修改 |
 | Setting | Setting → Gateway | `/setting/parameter_change_event` (Topic) | 上报配置变更 |
 | DR | Gateway → DR | `/dr/start_recording` (Service) | 转发数据采集指令 |
+| Data Uploader (内部子模块) | Gateway ↔ DU | 内部 Service 调用 | 带宽配额申请/通知、上传调度 |
+| Data Rule Engine | Gateway → DRE | `/data_rule_engine/deploy_rules` (`DeployRules`) | 转发云端采集规则（srv 定义见 §4.2，可迁至 `data_rule_engine_msgs`） |
 | EM | EM → Gateway | `/gateway/get_health_status` (Service) | EM健康检查 |
 | 云端 | 云端 → Gateway | MQTT/WS/gRPC | 接收云端命令 |
 | 云端 | Gateway → 云端 | MQTT/WS/gRPC | 上报状态和遥测 |
+| Interaction | Gateway ↔ Interaction | 依产品实现（Topic/Service） | 交互意图与连接会话分工见 §2；Gateway 不经 Interaction 做意图推理 |
 
 ### 6.2 关键交互时序
 
 #### 时序1：用户通过APP下发任务
 
-```
-APP用户         Gateway          TE           SM          MC/MP/PnC
-  │               │              │            │             │
-  │──下发任务────►│              │            │             │
-  │               │──验证鉴权───►│            │             │
-  │               │◄──验证通过───│            │             │
-  │               │              │            │             │
-  │               │──────────create_task────►│             │
-  │               │              │──is_motion_allowed─────►│
-  │               │              │◄──allowed───────────────│
-  │               │              │            │             │
-  │               │◄────task_accepted────────│            │
-  │◄──任务已接收───│              │            │             │
-  │               │              │            │             │
-  │               │◄──task_state(RUNNING)────│            │
-  │◄──进度更新─────│              │            │             │
+```mermaid
+sequenceDiagram
+    actor APP as APP用户
+    participant GW as Gateway
+    participant TE as TE
+    participant SM as SM
+
+    APP->>GW: 下发任务
+    Note over GW: 会话鉴权、HMAC 与白名单校验（Gateway 内部，不经 TE）
+
+    GW->>TE: create_task（或等价 Service）
+    TE->>SM: /sm/is_motion_allowed（IsMotionAllowed）
+    SM-->>TE: allowed
+
+    TE-->>GW: task_accepted
+    GW-->>APP: 任务已接收
+
+    TE-->>GW: task_state（RUNNING）
+    GW-->>APP: 进度更新（遥测/推送）
 ```
 
 #### 时序2：云端急停指令
 
-```
-云端运维        Gateway          SM           MC          EM
-  │              │              │            │            │
-  │──E-Stop指令─►│              │            │            │
-  │              │──验证鉴权───►│            │            │
-  │              │◄──验证通过───│            │            │
-  │              │              │            │            │
-  │              │────────────trigger_estop──────────────►│
-  │              │              │            │            │
-  │              │◄──────────accepted:true───────────────│
-  │              │              │            │            │
-  │              │◄──robot_state(ACTIVE_E_STOP)───────────│
-  │              │              │            │            │
-  │◄──确认───────│              │            │            │
-  │              │              │            │            │
-  │              │              │──robot_state────────────►│
-  │              │              │            │            │
-  │              │              │            │──锁定运动──►│
+与 `sm_design.md`、`em_design_v2.md` 一致：**急停状态转换由 SM 权威完成**；EM 在订阅 `/sm/robot_state` 后广播 `/em/estop_immediate`，MC 等进入硬件安全模式。Gateway **不**直接调用 EM 触发急停。
+
+```mermaid
+sequenceDiagram
+    participant Cloud as 云端运维
+    participant GW as Gateway
+    participant SM as SM
+    participant EM as EM
+    Cloud->>GW: E-Stop 指令
+    Note over GW: Token/签名与白名单（Gateway 内部）
+
+    GW->>SM: /sm/trigger_estop（TriggerEStop）
+    SM-->>GW: accepted
+
+    Note over SM: 进入 ACTIVE_E_STOP（priority=100）
+
+    SM-->>EM: /sm/robot_state（ACTIVE_E_STOP）
+    Note over EM: EM：广播 /em/estop_immediate；MC 等订阅后进入硬件安全模式（见 em_design_v2）
+    GW-->>Cloud: 确认（CommandResult）
 ```
 
 ---
@@ -626,6 +689,19 @@ gateway_node:
         - "agent.*"
       dedup_window_sec: 10
 
+    data_upload:
+      enabled: true
+      control_reserved_percent: 30
+      upload_max_rate_mbps: 10.0
+      quota_check_interval_ms: 500
+      support_formats:
+        - "mifeng_v1"
+        - "coscene_v1"
+      anonymization:
+        enabled: true
+        blur_faces: true
+        blur_license_plates: true
+
     local_app:
       enabled: true
       port: 8080
@@ -657,6 +733,10 @@ uint16 ERR_GW_TELEMETRY_QUEUE_FULL        = 6012   # 遥测队列满
 uint16 ERR_GW_FIRMWARE_DOWNLOAD_FAILED    = 6013   # 固件下载失败
 uint16 ERR_GW_DOWNLOAD_VERIFY_FAILED      = 6014   # 下载文件校验失败
 uint16 ERR_GW_INVALID_SESSION             = 6015   # 无效会话
+uint16 ERR_GW_BANDWIDTH_QUOTA_EXCEEDED    = 6016   # 带宽配额超限
+uint16 ERR_GW_DATA_UPLOAD_FAILED          = 6017   # 数据资产上传失败
+uint16 ERR_GW_UPLOAD_RESUME_FAILED        = 6018   # 断点续传失败
+uint16 ERR_GW_ANONYMIZATION_FAILED        = 6019   # 数据脱敏失败
 ```
 
 ### 8.2 错误码汇总表
@@ -679,6 +759,10 @@ uint16 ERR_GW_INVALID_SESSION             = 6015   # 无效会话
 | 6013 | ERR_GW_FIRMWARE_DOWNLOAD_FAILED | 固件下载失败 | HIGH |
 | 6014 | ERR_GW_DOWNLOAD_VERIFY_FAILED | 下载文件校验失败 | HIGH |
 | 6015 | ERR_GW_INVALID_SESSION | 无效会话 | MEDIUM |
+| 6016 | ERR_GW_BANDWIDTH_QUOTA_EXCEEDED | 带宽配额超限 | LOW |
+| 6017 | ERR_GW_DATA_UPLOAD_FAILED | 数据资产上传失败 | MEDIUM |
+| 6018 | ERR_GW_UPLOAD_RESUME_FAILED | 断点续传失败 | MEDIUM |
+| 6019 | ERR_GW_ANONYMIZATION_FAILED | 数据脱敏失败 | HIGH |
 
 ---
 
@@ -717,56 +801,59 @@ uint16 ERR_GW_INVALID_SESSION             = 6015   # 无效会话
 
 ```
 gateway_msgs/           # 消息定义包（纯接口）
-├── msg/
-│   ├── ConnectionState.msg
-│   ├── CommandEnvelope.msg
-│   ├── CommandResult.msg
-│   ├── TelemetryBatch.msg
-│   ├── TelemetryItem.msg
-│   ├── Heartbeat.msg
-│   └── SessionInfo.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── AuthenticateSession.srv
-│   ├── ForwardCommand.srv
-│   ├── RequestOtaDownload.srv
-│   └── GetConnectionStatus.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        ConnectionState.msg
+        CommandEnvelope.msg
+        CommandResult.msg
+        TelemetryBatch.msg
+        TelemetryItem.msg
+        Heartbeat.msg
+        SessionInfo.msg
+    srv/
+        GetHealthStatus.srv
+        AuthenticateSession.srv
+        ForwardCommand.srv
+        RequestOtaDownload.srv
+        GetConnectionStatus.srv
+        DeployRules.srv
+    CMakeLists.txt
+    package.xml
 
 gateway/                # 节点实现包
-├── include/gateway/
-│   ├── gateway_node.hpp
-│   ├── cloud_connector.hpp
-│   ├── protocol_handler.hpp
-│   ├── connection_state_manager.hpp
-│   ├── auth_manager.hpp
-│   ├── rate_limiter.hpp
-│   ├── command_router.hpp
-│   ├── telemetry_aggregator.hpp
-│   └── session_manager.hpp
-├── src/
-│   ├── gateway_node.cpp
-│   ├── cloud_connector.cpp
-│   ├── protocol_handler.cpp
-│   ├── connection_state_manager.cpp
-│   ├── auth_manager.cpp
-│   ├── rate_limiter.cpp
-│   ├── command_router.cpp
-│   ├── telemetry_aggregator.cpp
-│   ├── session_manager.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_command_router.cpp
-│   ├── test_rate_limiter.cpp
-│   ├── test_auth_manager.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── gateway_params.yaml
-├── launch/
-│   └── gateway.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/gateway/
+        gateway_node.hpp
+        cloud_connector.hpp
+        protocol_handler.hpp
+        connection_state_manager.hpp
+        auth_manager.hpp
+        rate_limiter.hpp
+        command_router.hpp
+        telemetry_aggregator.hpp
+        session_manager.hpp
+        data_asset_uploader.hpp
+    src/
+        gateway_node.cpp
+        cloud_connector.cpp
+        protocol_handler.cpp
+        connection_state_manager.cpp
+        auth_manager.cpp
+        rate_limiter.cpp
+        command_router.cpp
+        telemetry_aggregator.cpp
+        session_manager.cpp
+        data_asset_uploader.cpp
+        main.cpp
+    test/
+        test_command_router.cpp
+        test_rate_limiter.cpp
+        test_auth_manager.cpp
+        test_integration.cpp
+    config/
+        gateway_params.yaml
+    launch/
+        gateway.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ---
@@ -784,5 +871,8 @@ gateway/                # 节点实现包
 | 最大并发APP连接 | 10 | 同时连接的APP客户端数 |
 | 遥测丢包率 | < 0.1% | 网络正常时的遥测丢失率 |
 | Token刷新无感知 | 100% | 刷新过程不中断通信 |
+| 带宽配额响应延迟 | < 10ms | Data Uploader申请配额到响应 |
+| 控制指令带宽保证 | 30% | 固定预留比例 |
+| 数据上传带宽利用率 | > 80% | 空闲带宽利用率 |
 | CPU占用 | < 5% | 单核，正常负载下 |
 | 内存占用 | < 256MB | 稳态运行时 |

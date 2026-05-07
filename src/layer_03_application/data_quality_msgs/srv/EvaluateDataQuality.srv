@@ -1,0 +1,8 @@
+# Manually trigger data quality evaluation
+
+string file_path                  # Local data file path
+uint8 data_type
+---
+bool success
+data_quality_msgs/DataQualityScore score
+string message

@@ -43,22 +43,24 @@ EM 将这三者串联：**SM 决策状态 → EM 执行进程操作 → HDS 定�
 
 EM 在端侧架构中的位置：
 
-```
-┌─────────────┐
-│   Gateway   │  ← 云端/APP 通信（唯一云端出口）
-├─────────────┤
-│     SM      │  ← 状态机决策（FSM 唯一权威）
-├─────────────┤
-│     TE      │  ← 任务调度
-├─────────────┤
-│   EM（本模块）│  ← 无状态执行器（启动/监控/恢复）
-├─────────────┤
-│     HDS     │  ← 故障诊断与定级（唯一定级权威）
-├─────────────┤
-│  systemd    │  ← OS 级进程管理
-├─────────────┤
-│    HAL      │  ← 硬件抽象
-└─────────────┘
+```mermaid
+flowchart TB
+    Gateway["Gateway
+云端/APP 通信（唯一云端出口）"]
+    SM["SM
+状态机决策（FSM 唯一权威）"]
+    TE["TE
+任务调度"]
+    EM["EM（本模块）
+无状态执行器（启动/监控/恢复）"]
+    HDS["HDS
+故障诊断与定级（唯一定级权威）"]
+    Systemd["systemd
+OS 级进程管理"]
+    HAL["HAL
+硬件抽象"]
+
+    Gateway --> SM --> TE --> EM --> HDS --> Systemd --> HAL
 ```
 
 | 边界 | EM 负责 | 对方负责 | 红线 |
@@ -323,24 +325,31 @@ builtin_interfaces/Duration duration
 
 ### 5.1 节点结构
 
-```
-executive_manager_node
-├── rclcpp::Node (主节点，普通用户权限)
-│   ├── Orchestrator (编排引擎)
-│   ├── HealthMonitor (健康监控)
-│   ├── RecoveryEngine (恢复引擎)
-│   ├── ProcessRegistry (进程注册表)
-│   ├── ConfigManager (配置管理)
-│   └── TransitionQueue (编排队列)
-├── EStopHandler (独立节点/线程)
-│   ├── 独立 Executor（SingleThreadedExecutor）
-│   ├── /sm/robot_state 订阅（监听 ACTIVE_E_STOP）
-│   ├── /em/estop_immediate Publisher
-│   └── Unix Domain Socket → em_daemon
-└── em_daemon (root 特权代理，最小化代码)
-    ├── UDS Server
-    ├── systemd dbus 调用
-    └── kill/send_signal
+```mermaid
+flowchart TB
+    subgraph EMNode["executive_manager_node"]
+        subgraph MainNode["rclcpp::Node (主节点，普通用户权限)"]
+            Orchestrator["Orchestrator (编排引擎)"]
+            HealthMonitor["HealthMonitor (健康监控)"]
+            RecoveryEngine["RecoveryEngine (恢复引擎)"]
+            ProcessRegistry["ProcessRegistry (进程注册表)"]
+            ConfigManager["ConfigManager (配置管理)"]
+            TransitionQueue["TransitionQueue (编排队列)"]
+        end
+
+        subgraph EStop["EStopHandler (独立节点/线程)"]
+            EStopExec["独立 Executor（SingleThreadedExecutor）"]
+            EStopSub["/sm/robot_state 订阅"]
+            EStopPub["/em/estop_immediate Publisher"]
+            EStopUDS["Unix Domain Socket → em_daemon"]
+        end
+
+        subgraph Daemon["em_daemon (root 特权代理，最小化代码)"]
+            UDS["UDS Server"]
+            DBus["systemd dbus 调用"]
+            Kill["kill/send_signal"]
+        end
+    end
 ```
 
 ### 5.2 关键组件
@@ -432,7 +441,7 @@ EM 加载 /opt/striding/em/config.yaml（校验签名 + DAG 无环）
 EM 进入 IDLE，等待 SM 指令
     ↓
 SM 启动完成（BOOTING 阶段），调用 EM::ApplyProcessSet
-    │   groups_to_start: ["infra", "middleware", "ops"]
+        groups_to_start: ["infra", "middleware", "ops"]
     ↓
 EM Orchestrator 按 DAG 启动 infra → middleware → ops
     ↓
@@ -441,7 +450,7 @@ EM Orchestrator 按 DAG 启动 infra → middleware → ops
 SM 广播 FSM: BOOTING → STANDBY
     ↓
 SM 调用 EM::ApplyProcessSet（如需要 perception + control）
-    │   groups_to_start: ["perception", "control", "ai"]
+        groups_to_start: ["perception", "control", "ai"]
     ↓
 EM 编排启动 perception → control → ai
     ↓
@@ -456,16 +465,16 @@ SM FSM 状态变更（如 STANDBY → ACTIVE_IDLE）
 SM 查询内部映射表：ACTIVE_IDLE → ["perception", "control", "ai"]
     ↓
 SM 调用 EM::ApplyProcessSet
-    │   groups_to_start: ["perception", "control", "ai"]
-    │   reason: "Enter ACTIVE_IDLE"
-    │   requester_node: "state_manager"
+        groups_to_start: ["perception", "control", "ai"]
+        reason: "Enter ACTIVE_IDLE"
+        requester_node: "state_manager"
     ↓
 EM 计算差异：需要启动 perception + control + ai
     ↓
 EM Orchestrator 按 DAG 顺序执行
-    │   1. 启动 perception 组（并行启动 VSLAM / Lidar-SLAM / MapManager）
-    │   2. perception 就绪后启动 control 组
-    │   3. control 就绪后启动 ai 组
+        1. 启动 perception 组（并行启动 VSLAM / Lidar-SLAM / MapManager）
+        2. perception 就绪后启动 control 组
+        3. control 就绪后启动 ai 组
     ↓
 所有就绪探针通过
     ↓
@@ -492,12 +501,12 @@ control 组重启成功 → 恢复正常
     ↓
 （若 L2 失败）
 L3: RecoveryEngine 执行以下动作：
-    │   1. 停止 perception + control + ai（P2/P3 进程）
-    │   2. 保留 infra + middleware + ops 运行
-    │   3. 通过 MQTT 上报 HDS Master：
-    │      "em/event/l3_suggestion"
-    │      { "reason": "control group restart exhausted",
-    │        "stopped_groups": ["perception", "control", "ai"] }
+        1. 停止 perception + control + ai（P2/P3 进程）
+        2. 保留 infra + middleware + ops 运行
+        3. 通过 MQTT 上报 HDS Master：
+          "em/event/l3_suggestion"
+          { "reason": "control group restart exhausted",
+            "stopped_groups": ["perception", "control", "ai"] }
     ↓
 HDS Master 收到建议，进行故障定级
     ↓
@@ -516,18 +525,18 @@ E-Stop 触发（硬件按钮 / HDS / SM）
 SM 立即进入 ACTIVE_E_STOP（priority=100，不可被覆盖）
     ↓
 EStopHandler（独立 Executor）订阅到状态变更
-    │   ⚠️ 独立线程，延迟目标 < 10ms
+        ⚠️ 独立线程，延迟目标 < 10ms
     ↓
 EStopHandler 执行：
-    │   1. estop_active = true（原子标志位）
-    │   2. 向 Orchestrator 发送"取消所有编排"
-    │   3. 广播 /em/estop_immediate（0 延迟）
-    │   4. MC 收到 estop_immediate，进入硬件级安全模式
-    │   5. 等待 500ms（MC 安全模式确认超时）
-    │   6. em_daemon 停止运动相关进程：
-    │      ├─ control 组：SIGTERM → SIGKILL（500ms 超时，硬编码）
-    │      ├─ perception 组：SIGTERM → SIGKILL（5s 超时）
-    │      └─ ai 组：SIGTERM → SIGKILL（5s 超时）
+        1. estop_active = true（原子标志位）
+        2. 向 Orchestrator 发送"取消所有编排"
+        3. 广播 /em/estop_immediate（0 延迟）
+        4. MC 收到 estop_immediate，进入硬件级安全模式
+        5. 等待 500ms（MC 安全模式确认超时）
+        6. em_daemon 停止运动相关进程：
+          - control 组：SIGTERM → SIGKILL（500ms 超时，硬编码）
+          - perception 组：SIGTERM → SIGKILL（5s 超时）
+          - ai 组：SIGTERM → SIGKILL（5s 超时）
     ↓
 保留运行：infra + middleware + ops
     ↓
@@ -682,49 +691,49 @@ groups:
 
 ```
 em_msgs/                      # 消息定义包（纯接口）
-├── msg/
-│   ├── ProcessStatus.msg
-│   ├── ProcessGroupConfig.msg
-│   ├── ExecutionProgress.msg
-│   └── ErrorCode.msg          # 错误码定义（原名 EmErrorCode.msg）
-├── srv/
-│   ├── ControlProcess.srv
-│   ├── GetProcessStatus.srv
-│   ├── ApplyProcessSet.srv
-│   ├── ReloadConfiguration.srv
-│   └── AcknowledgeEstopRelease.srv
-├── action/
-│   └── SystemRestart.action
-└── CMakeLists.txt
+    msg/
+        ProcessStatus.msg
+        ProcessGroupConfig.msg
+        ExecutionProgress.msg
+        ErrorCode.msg          # 错误码定义（原名 EmErrorCode.msg）
+    srv/
+        ControlProcess.srv
+        GetProcessStatus.srv
+        ApplyProcessSet.srv
+        ReloadConfiguration.srv
+        AcknowledgeEstopRelease.srv
+    action/
+        SystemRestart.action
+    CMakeLists.txt
 
 executive_manager/            # 节点实现包
-├── include/executive_manager/
-│   ├── orchestrator.hpp
-│   ├── health_monitor.hpp
-│   ├── recovery_engine.hpp
-│   ├── process_registry.hpp
-│   ├── config_manager.hpp
-│   ├── transition_queue.hpp
-│   └── estop_handler.hpp
-├── src/
-│   ├── main.cpp
-│   ├── orchestrator.cpp
-│   ├── health_monitor.cpp
-│   ├── recovery_engine.cpp
-│   ├── process_registry.cpp
-│   ├── config_manager.cpp
-│   ├── transition_queue.cpp
-│   └── estop_handler.cpp
-├── em_daemon/                # root 特权代理（最小化）
-│   ├── src/
-│   │   └── em_daemon.cpp
-│   └── CMakeLists.txt
-├── config/
-│   ├── em_params.yaml
-│   └── config.yaml.template
-├── launch/
-│   └── executive_manager.launch.py
-└── CMakeLists.txt
+    include/executive_manager/
+        orchestrator.hpp
+        health_monitor.hpp
+        recovery_engine.hpp
+        process_registry.hpp
+        config_manager.hpp
+        transition_queue.hpp
+        estop_handler.hpp
+    src/
+        main.cpp
+        orchestrator.cpp
+        health_monitor.cpp
+        recovery_engine.cpp
+        process_registry.cpp
+        config_manager.cpp
+        transition_queue.cpp
+        estop_handler.cpp
+    em_daemon/                # root 特权代理（最小化）
+        src/
+            em_daemon.cpp
+        CMakeLists.txt
+    config/
+        em_params.yaml
+        config.yaml.template
+    launch/
+        executive_manager.launch.py
+    CMakeLists.txt
 ```
 
 ---

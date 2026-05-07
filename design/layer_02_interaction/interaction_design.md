@@ -38,52 +38,30 @@
 
 ## 3. 状态机设计
 
-```
-                         ┌──────────────┐
-         ┌───────────────►│              │◄──────────────┐
-         │                │    IDLE      │               │
-         │                │              │               │
-         │                └──────┬───────┘               │
-         │                       │ activate()            │
-    timeout /                    ▼                       │
-    no_interaction          ┌──────────────┐            │
-         │                  │   STANDBY    │            │
-         │                  │  (等待唤醒)   │            │
-         │                  └──────┬───────┘            │
-         │                         │ wake_word /        │
-         │                         │ person_detected    │
-         │                         ▼                    │
-         │                  ┌──────────────┐           │
-         │                  │  LISTENING   │           │
-         │                  │  (采集输入)   │           │
-         │                  └──────┬───────┘           │
-         │                         │ input_complete     │
-         │                         ▼                    │
-         │                  ┌──────────────┐           │
-         │                  │  PROCESSING  │           │
-         │                  │  (意图理解)   │           │
-         │                  └──────┬───────┘           │
-         │                         │ intent_resolved    │
-         │            ┌────────────┼────────────┐      │
-         │            ▼            ▼            ▼      │
-         │     ┌──────────┐ ┌──────────┐ ┌──────────┐ │
-         │     │RESPONDING│ │DELEGATING│ │AWAITING  │ │
-         │     │(语音/动作│ │(提交任务│ │CONFIRM   │ │
-         │     │ 反馈)    │ │ 给Agent) │ │(等待确认)│ │
-         │     └────┬─────┘ └────┬─────┘ └────┬─────┘ │
-         │          │            │            │       │
-         │          └────────────┴────────────┘       │
-         │                       │                      │
-         │                       ▼                      │
-         │                  ┌──────────────┐           │
-         └──────────────────│   STANDBY    │◄──────────┘
-                            │              │
-                            └──────────────┘
+```mermaid
+stateDiagram-v2
+    direction TB
 
-                            ┌──────────────┐
-                            │    FAULT     │
-                            │              │
-                            └──────────────┘
+    [*] --> IDLE
+    IDLE --> STANDBY: activate()
+
+    STANDBY --> LISTENING: wake_word / person_detected
+    LISTENING --> PROCESSING: input_complete
+    PROCESSING --> RESPONDING: intent_resolved, direct_response
+    PROCESSING --> DELEGATING: intent_resolved, delegate_to_agent
+    PROCESSING --> AWAITING_CONFIRM: intent_resolved, need_confirm
+
+    RESPONDING --> STANDBY: done / timeout
+    DELEGATING --> STANDBY: done / timeout
+    AWAITING_CONFIRM --> STANDBY: confirm_received / timeout
+
+    STANDBY --> IDLE: timeout / no_interaction
+
+    PROCESSING --> FAULT: error
+    LISTENING --> FAULT: error
+    RESPONDING --> FAULT: error
+    DELEGATING --> FAULT: error
+    AWAITING_CONFIRM --> FAULT: error
 ```
 
 **状态说明**：
@@ -344,29 +322,17 @@ string message_id
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      InteractionNode                             │
-│                                                                  │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  Input Fusion   │  │ Intent Engine   │  │   Response      │  │
-│  │   (输入融合)     │──►│   (意图引擎)     │──►│   Manager       │  │
-│  │                 │  │                 │  │   (响应管理)     │  │
-│  │ - VoiceIntent   │  │ - NER/LU        │  │ - TTS dispatch  │  │
-│  │ - VisualIntent  │  │ - Context mgmt  │  │ - LED dispatch  │  │
-│  │ - TouchIntent   │  │ - Arbitration   │  │ - Motion dispatch│ │
-│  │ - MessageIntent │  │ - Priority queue│  │ - Msg dispatch  │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-│           ▲                                              │       │
-│           │                                              ▼       │
-│  ┌────────┴────────┐                            ┌──────────────┐│
-│  │ Context Memory  │                            │ Output Queue ││
-│  │                 │                            │              ││
-│  │ - Session stack │                            │ (优先级排序)  ││
-│  │ - User profiles │                            │              ││
-│  │ - Dialogue hist │                            └──────────────┘│
-│  └─────────────────┘                                            │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph InteractionNode["InteractionNode"]
+        CM["Context Memory（上下文）<br/>Session stack · User profiles · Dialogue history"]
+        IF["Input Fusion（输入融合）<br/>VoiceIntent / VisualIntent / TouchIntent / MessageIntent"]
+        IE["Intent Engine（意图引擎）<br/>NER/LU · Context mgmt · Arbitration · Priority queue"]
+        RM["Response Manager（响应管理）<br/>TTS / LED / Motion / Msg dispatch"]
+        OQ["Output Queue（优先级排序）"]
+
+        CM --> IF --> IE --> RM --> OQ
+    end
 ```
 
 ### 5.2 关键决策
@@ -391,35 +357,35 @@ string message_id
 
 **交互事件处理流程**：
 
-```
-User ──[语音/手势/触摸/消息]──► HAL_Audio/Perception/EtherCAT/Gateway
-                                      │
-                                      ▼
-                              [Interaction 输入融合]
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    ▼                 ▼                 ▼
-              [VoiceIntent]    [VisualIntent]     [TouchIntent]
-                    │                 │                 │
-                    └─────────────────┼─────────────────┘
-                                      ▼
-                              [意图理解与仲裁]
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    ▼                 ▼                 ▼
-              [直接响应]         [委托Agent]         [需要确认]
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-            [TTS/LED/动作]     [InteractionEvent]  [TTS询问]
-                    │           上报给 Agent        等待用户
-                    │                 │                 │
-                    │                 ▼                 │
-                    │           [Agent推理]◄────────────┘
-                    │                 │
-                    │                 ▼
-                    │           [任务提交给 TE]
-                    │                 │
-                    └─────────────────┘
+```mermaid
+flowchart TD
+    User([User]) --> HAL["HAL_Audio / Perception<br/>EtherCAT / Gateway"]
+    HAL --> Fusion["Interaction 输入融合"]
+
+    Fusion --> VI[VoiceIntent]
+    Fusion --> VIs[VisualIntent]
+    Fusion --> TI[TouchIntent]
+    Fusion --> MI[MessageIntent]
+
+    VI --> Arb["意图理解与仲裁"]
+    VIs --> Arb
+    TI --> Arb
+    MI --> Arb
+
+    Arb --> Direct["直接响应"]
+    Arb --> Delegate["委托 Agent"]
+    Arb --> Confirm["需要确认"]
+
+    Direct --> Out1["TTS / LED / 动作"]
+    Delegate --> Ev["InteractionEvent 上报 Agent"]
+    Confirm --> Ask["TTS 询问<br/>等待用户"]
+
+    Ev --> AgentR[Agent 推理]
+    Ask --> AgentR
+    AgentR --> TE["任务提交给 TE"]
+
+    Out1 --> End([回合结束 / 返回待机])
+    TE --> End
 ```
 
 ---
@@ -448,30 +414,27 @@ User ──[语音/手势/触摸/消息]──► HAL_Audio/Perception/EtherCAT/
 
 **多模态交互时序（语音+手势）**：
 
-```
-User          HAL_Audio       Perception      Interaction       Agent
- │                │               │                │              │
- │──[指向左边]─────►│               │                │              │
- │                │               │──VisualIntent─►│              │
- │                │               │  (gesture=point│              │
- │                │               │   direction=left)             │
- │                │               │                │              │
- │──[拿那个]──────►│               │                │              │
- │                │──SpeechResult─►│                │              │
- │                │  ("拿那个")    │                │              │
- │                │               │                │              │
- │                │               │                │[融合: 指向+语音]
- │                │               │                │              │
- │                │               │                │──Interaction──►│
- │                │               │                │   Event        │
- │                │               │                │  intent="pick" │
- │                │               │                │  target=left   │
- │                │               │                │              │
- │                │◄─Speak Action─│◄───────────────│◄─────────────│
- │                │  "好的，拿左边的杯子"             │              │
- │                │               │                │              │
- │──[TTS播放]─────│               │                │              │
- │                │               │                │              │
+```mermaid
+sequenceDiagram
+    actor User as User
+    participant HAL_Audio as HAL_Audio
+    participant Perception as Perception
+    participant Interaction as Interaction
+    participant Agent as Agent
+
+    User->>Perception: 指向左边（手势）
+    Perception->>Interaction: VisualIntent<br/>(gesture=point, direction=left)
+
+    User->>HAL_Audio: 说「拿那个」
+    HAL_Audio->>Interaction: SpeechResult（「拿那个」）
+
+    Note over Interaction: 融合：指向 + 语音
+
+    Interaction->>Agent: InteractionEvent<br/>intent=pick, target=left
+
+    Agent-->>Interaction: Speak Action<br/>「好的，拿左边的杯子」
+    Interaction-->>HAL_Audio: /hal_audio/speak（TTS）
+    User-->>HAL_Audio: 听到 TTS 播放
 ```
 
 ---
@@ -569,39 +532,21 @@ interaction_node:
 
 ## 10. 包结构
 
-```
-interaction_msgs/
-├── msg/
-│   ├── InteractionState.msg
-│   ├── InteractionEvent.msg
-│   ├── VoiceIntent.msg
-│   ├── VisualIntent.msg
-│   ├── TouchIntent.msg
-│   ├── MessageIntent.msg
-│   ├── EmotionState.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── QueryInteractionHistory.srv
-│   ├── SetInteractionMode.srv
-│   └── SendMessage.srv
-├── CMakeLists.txt
-└── package.xml
+```mermaid
+flowchart TB
+    subgraph interaction_msgs["interaction_msgs/"]
+        IM_MSG["msg/<br/>InteractionState.msg · InteractionEvent.msg<br/>VoiceIntent.msg · VisualIntent.msg · TouchIntent.msg<br/>MessageIntent.msg · EmotionState.msg · Heartbeat.msg"]
+        IM_SRV["srv/<br/>GetHealthStatus.srv · QueryInteractionHistory.srv<br/>SetInteractionMode.srv · SendMessage.srv"]
+        IM_ROOT["CMakeLists.txt · package.xml"]
+    end
 
-interaction/
-├── include/interaction/
-│   └── interaction_node.hpp
-├── src/
-│   ├── interaction_node.cpp
-│   ├── input_fusion.cpp         # 多模态输入融合
-│   ├── intent_engine.cpp         # 意图理解与仲裁
-│   ├── context_manager.cpp       # 上下文管理
-│   └── response_manager.cpp      # 响应管理
-├── config/
-│   └── interaction_params.yaml
-├── launch/
-│   └── interaction.launch.py
-└── CMakeLists.txt
+    subgraph interaction["interaction/"]
+        IN_INC["include/interaction/<br/>interaction_node.hpp"]
+        IN_SRC["src/<br/>interaction_node.cpp · input_fusion.cpp<br/>intent_engine.cpp · context_manager.cpp · response_manager.cpp"]
+        IN_CFG["config/<br/>interaction_params.yaml"]
+        IN_LAUNCH["launch/<br/>interaction.launch.py"]
+        IN_ROOT["CMakeLists.txt"]
+    end
 ```
 
 ---

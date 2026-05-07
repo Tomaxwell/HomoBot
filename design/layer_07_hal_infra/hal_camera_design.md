@@ -188,26 +188,28 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    HalCameraNode                             │
-├─────────────────────────────────────────────────────────────┤
-│  DeviceManager                                               │
-│  ├─ D435Device (librealsense2 wrapper)                      │
-│  ├─ D405Device_1 (librealsense2 wrapper)                    │
-│  └─ D405Device_2 (librealsense2 wrapper)                    │
-├─────────────────────────────────────────────────────────────┤
-│  StreamManager                                               │
-│  ├─ RGBPublisher (sensor_msgs/Image)                        │
-│  ├─ DepthPublisher (sensor_msgs/Image)                      │
-│  ├─ PointCloudPublisher (sensor_msgs/PointCloud2)           │
-│  └─ CameraInfoPublisher (sensor_msgs/CameraInfo)            │
-├─────────────────────────────────────────────────────────────┤
-│  MonitorThread                                               │
-│  ├─ Temperature monitor                                     │
-│  ├─ Frame drop detection                                    │
-│  └─ Auto-recovery on fault                                  │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HalCameraNode
+        DeviceManager["DeviceManager"]
+        D435["D435Device (librealsense2 wrapper)"]
+        D405_1["D405Device_1 (librealsense2 wrapper)"]
+        D405_2["D405Device_2 (librealsense2 wrapper)"]
+        StreamManager["StreamManager"]
+        RGB["RGBPublisher (sensor_msgs/Image)"]
+        Depth["DepthPublisher (sensor_msgs/Image)"]
+        PC["PointCloudPublisher (sensor_msgs/PointCloud2)"]
+        Info["CameraInfoPublisher (sensor_msgs/CameraInfo)"]
+        Monitor["MonitorThread"]
+
+        DeviceManager --> D435
+        DeviceManager --> D405_1
+        DeviceManager --> D405_2
+        StreamManager --> RGB
+        StreamManager --> Depth
+        StreamManager --> PC
+        StreamManager --> Info
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -297,30 +299,30 @@ string message
 
 ```
 hal_camera_msgs/
-├── msg/
-│   ├── CameraDeviceState.msg
-│   ├── CameraInfoArray.msg
-│   ├── Heartbeat.msg
-│   └── ErrorCode.msg               # 错误码（原名 HalCameraErrorCode.msg）
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── StartStreaming.srv
-│   ├── StopStreaming.srv
-│   └── SetExposure.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        CameraDeviceState.msg
+        CameraInfoArray.msg
+        Heartbeat.msg
+        ErrorCode.msg               # 错误码（原名 HalCameraErrorCode.msg）
+    srv/
+        GetHealthStatus.srv
+        StartStreaming.srv
+        StopStreaming.srv
+        SetExposure.srv
+    CMakeLists.txt
+    package.xml
 
 hal_camera/
-├── include/hal_camera/
-│   └── hal_camera_node.hpp
-├── src/
-│   └── hal_camera_node.cpp
-├── config/
-│   └── hal_camera_params.yaml
-├── launch/
-│   └── hal_camera.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/hal_camera/
+        hal_camera_node.hpp
+    src/
+        hal_camera_node.cpp
+    config/
+        hal_camera_params.yaml
+    launch/
+        hal_camera.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ## 11. 关键性能指标（KPI）

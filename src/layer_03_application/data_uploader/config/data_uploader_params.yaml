@@ -1,0 +1,36 @@
+data_uploader:
+  # Upload strategy
+  upload_mode: "adaptive"          # adaptive / immediate / scheduled
+  scheduled_upload_window:
+    start: "02:00"                 # Idle upload start time
+    end: "06:00"                   # Idle upload end time
+  max_concurrent_uploads: 3        # Max concurrent uploads
+  max_retry_count: 5               # Max retry count
+  retry_backoff_base_sec: 10       # Backoff base (seconds)
+
+  # Bandwidth management
+  bandwidth:
+    max_upload_rate_mbps: 10.0     # Max upload rate
+    control_reserved_percent: 30   # Control command reserved bandwidth (%)
+    adaptive_min_rate_mbps: 0.5    # Minimum guaranteed upload rate
+
+  # Compression strategy
+  compression:
+    video_codec: "h265"            # h264 / h265 / av1
+    video_quality: 28              # CRF (lower = higher quality)
+    pointcloud_codec: "zstd"       # zstd / gzip
+    pointcloud_level: 3            # Compression level
+    enable_compression: true       # Whether to enable compression
+
+  # Anonymization strategy
+  anonymization:
+    enabled: true
+    blur_faces: true
+    blur_license_plates: true
+    blur_regions: []               # Custom sensitive regions (bounding boxes)
+
+  # Storage
+  storage:
+    temp_compression_path: "/tmp/data_uploader/compress"
+    max_temp_size_gb: 50
+    delete_after_upload: false     # Delete local files after upload

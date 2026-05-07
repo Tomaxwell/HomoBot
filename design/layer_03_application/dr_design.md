@@ -9,12 +9,16 @@
 **核心职责**：
 
 1. **按需录制**：接收来自 TE/Gateway 的录制启动/停止指令，记录指定 Topic 数据
-2. **自动录制策略**：基于事件触发自动录制（如故障发生前后 30s 自动保存）
-3. **VLA 训练数据管理**：按 VLA 格式组织录制数据（图像 + 动作标签 + 语言指令）
-4. **数据压缩与存储**：实时压缩（H.264/gzip）并写入磁盘，支持循环录制
-5. **数据检索与导出**：按时间、事件、任务 ID 检索录制片段，支持导出
-6. **存储管理**：监控存储空间，自动清理过期数据
-7. **数据标注**：支持录制时附加元数据标注（任务类型、场景标签、操作者注释）
+2. **规则引擎驱动采集**：订阅 Data Rule Engine 的触发信号，实现规则驱动的自动采集
+3. **自动录制策略**：基于事件触发自动录制（如故障发生前后 30s 自动保存）
+4. **VLA 训练数据管理**：按 VLA 格式组织录制数据（图像 + 动作标签 + 语言指令）
+5. **数据压缩与存储**：实时压缩（H.264/gzip）并写入磁盘，支持循环录制
+6. **数据质量分层存储**：对接 Data Quality Filter 评分，按质量等级分层存储
+7. **智能生命周期管理**：高质量数据长期保留，低质量数据自动清理
+8. **自动语义标注**：自动附加规则触发原因、失效上下文、数据质量评分
+9. **数据检索与导出**：按时间、事件、任务 ID、质量等级检索录制片段，支持导出
+10. **存储管理**：监控存储空间，自动清理过期数据
+11. **数据标注**：支持录制时附加元数据标注（任务类型、场景标签、操作者注释）
 
 **与相邻模块的边界**：
 
@@ -25,6 +29,10 @@
 | DR ↔ Gateway | 接收云端录制请求；上传数据到云端 | 云端通信 |
 | DR ↔ SM | 订阅状态转换事件用于自动触发 | 状态机决策 |
 | DR ↔ HDS | 接收故障事件用于自动保存黑匣子 | 故障诊断 |
+| DR ↔ Data Rule Engine | 接收规则触发信号；按规则参数录制 | 规则解析与触发判断 |
+| DR ↔ Data Quality Filter | 接收逐帧质量评分；按质量分层存储 | 数据质量评估 |
+| DR ↔ Data Uploader | 提供数据资产元数据；通知可清理的本地副本 | 数据上传调度 |
+| DR ↔ MC | 接收失效上下文（FailureCaptureBuffer） | 失效状态冻结与捕获 |
 | DR ↔ Setting | 读取录制策略、存储路径配置 | 参数持久化 |
 | DR ↔ Agent | 接收语言指令用于 VLA 数据标注 | VLA 决策 |
 
@@ -59,40 +67,21 @@
 
 ### 3.2 状态转换图
 
-```
-                        ┌───────────────────────────────────────────────┐
-                        │                                               │
-                  ┌─────┴──────┐   arm / enable     ┌──────────────────┴───┐
-            ┌──►  │   DR_IDLE  │───────────────────►│      DR_ARMED        │
-            │     │     0      │                    │         1            │
-            │     └────────────┘                    └──────────┬───────────┘
-            │           ▲                                      │
-            │           │         manual_start / auto_trigger  │
-            │           │    ┌─────────────────────────────────┘
-            │           │    ▼
-            │           │  ┌──────────────────┐   pause      ┌───────────┐
-            │           │  │   DR_RECORDING   │─────────────►│ DR_PAUSED │
-            │           │  │        2         │              │     3     │
-            │           │  └────────┬─────────┘              └─────┬─────┘
-            │           │           │ stop / complete                │ resume
-            │           │    ┌──────┘                              │
-            │           │    ▼                                     │
-            │           │  ┌──────────────────┐◄───────────────────┘
-            │           └──│     DR_SAVING    │
-            │              │        4         │
-            │              └────────┬─────────┘
-            │                       │ save_complete
-            │                       ▼
-            │              ┌──────────────────┐
-            │              │    DR_EXPORTING  │◄──── export_request
-            │              │        5         │
-            │              └────────┬─────────┘
-            │                       │ export_complete
-            │                       │
-            │              ┌────────▼────────┐
-            └─────────────│     DR_ERROR    │◄──── storage_full / write_fail
-                           │        6        │
-                           └─────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> DR_IDLE
+    DR_IDLE --> DR_ARMED : arm / enable
+    DR_ARMED --> DR_RECORDING : manual_start / auto_trigger
+    DR_RECORDING --> DR_PAUSED : pause
+    DR_PAUSED --> DR_RECORDING : resume
+    DR_RECORDING --> DR_SAVING : stop / complete
+    DR_SAVING --> DR_IDLE : save_complete
+    DR_SAVING --> DR_EXPORTING : export_request
+    DR_EXPORTING --> DR_SAVING : export_complete
+    DR_SAVING --> DR_ERROR : storage_full / write_fail
+    DR_RECORDING --> DR_ERROR : storage_full / write_fail
+    DR_EXPORTING --> DR_ERROR : storage_full / write_fail
+    DR_ERROR --> DR_IDLE : reset
 ```
 
 ### 3.3 状态转换表
@@ -182,6 +171,42 @@ uint8 state
 bool healthy
 string status_message
 float32 storage_usage_percent
+```
+
+> **注**：DR 不复用定义 `DataQualityScore.msg`，直接订阅 Data Quality Filter 发布的 `data_quality_msgs/msg/DataQualityScore`（Topic: `/data_quality/score`）。
+
+```
+# dr_msgs/msg/FailureContext.msg
+# 失效上下文（来自 MC）
+
+string failure_id
+builtin_interfaces/Time failure_time
+string failure_type
+string[] failure_reasons
+float64[] joint_positions_before
+float64[] joint_velocities_before
+float64[] control_commands_before
+float64[] sensor_readings_before
+string hds_diagnosis_result
+builtin_interfaces/Time stamp
+```
+
+```
+# dr_msgs/msg/DataAssetMetadata.msg
+# 数据资产元数据（用于云端导入）
+
+string asset_id
+string asset_type
+string source_module
+string[] tags
+float32 quality_score
+string rule_trigger_reason
+string failure_context_id
+string session_id
+builtin_interfaces/Time created_at
+uint64 size_bytes
+string checksum_sha256
+string cloud_format_version  # "mifeng_v1" / "coscene_v1"
 ```
 
 ### 4.2 服务定义 (srv)
@@ -312,6 +337,10 @@ string message
 | `/dr/recorder_state` | `dr_msgs/msg/RecorderState` | DR → ALL | Reliable + Transient Local + Depth 1 | 事件驱动 | 录制状态广播 |
 | `/dr/vla_data_frame` | `dr_msgs/msg/VlaDataFrame` | DR → ALL | Reliable + Volatile + Depth 10 | 10 Hz | VLA数据帧（VLA模式时） |
 | `/dr/heartbeat` | `dr_msgs/msg/Heartbeat` | DR → EM/HDS | Reliable + Volatile + Depth 1 | 1 Hz | 心跳 |
+| `/data_quality/score` | `data_quality_msgs/msg/DataQualityScore` | DQF → DR | Reliable + Volatile | 1kHz | 逐帧质量评分（DR 复用 DQF 消息定义） |
+| `/dr/failure_context` | `dr_msgs/msg/FailureContext` | MC → DR | Reliable + Volatile | 事件驱动 | 失效上下文 |
+| `/data_rule_engine/rule_trigger_event` | `data_rule_msgs/msg/RuleTriggerEvent` | DRE → DR | Reliable + Volatile | 事件驱动 | 规则触发信号 |
+| `/data_uploader/upload_status` | `data_uploader_msgs/msg/UploadStatus` | DU → DR | Reliable + Volatile | 事件驱动 | 上传完成通知 |
 
 #### Services
 
@@ -331,44 +360,55 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         DataRecorderNode                                  │
-│                                                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │                     Topic Subscriber Manager                         │  │
-│  │  - 动态订阅/取消订阅目标 Topic                                        │  │
-│  │  - QoS 适配（与被记录 Topic 一致）                                     │  │
-│  │  - 消息序列化（mcap/rosbag2 格式）                                     │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-│                                                                           │
-│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐   │
-│  │  Session Manager │    │  Storage Manager │    │  Trigger Engine  │   │
-│  │  (会话管理)       │    │  (存储管理)       │    │  (触发引擎)       │   │
-│  │                  │    │                  │    │                  │   │
-│  │  - 会话生命周期   │    │  - 文件写入      │    │  - 手动触发      │   │
-│  │  - 元数据管理    │    │  - 压缩编码      │    │  - 故障自动触发  │   │
-│  │  - 并发控制      │    │  - 配额管理      │    │  - 任务自动触发  │   │
-│  └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘   │
-│           │                       │                       │             │
-│  ┌────────▼───────────────────────▼───────────────────────▼─────────┐   │
-│  │                         VLA Data Assembler                         │   │
-│  │   (图像 + 关节状态 + 语言指令 → VLA训练数据帧)                      │   │
-│  └───────────────────────────────────────────────────────────────────┘   │
-│                                                                           │
-│  ┌──────────────────┐    ┌──────────────────┐                          │
-│  │  Pre-record      │    │  Export Manager  │                          │
-│  │  Buffer          │    │  (导出管理)       │                          │
-│  │  (预录缓冲区)     │    │                  │                          │
-│  │                  │    │  - 格式转换      │                          │
-│  │  - 环形缓冲      │    │  - 云端上传      │                          │
-│  │  - 触发前数据    │    │  - 进度报告      │                          │
-│  └──────────────────┘    └──────────────────┘                          │
-│                                                                           │
-│  ┌───────────────────────────────────────────────────────────────────┐   │
-│  │                        ROS2 Service/Topic Interface               │   │
-│  └───────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph DataRecorderNode["DataRecorderNode"]
+        subgraph TSM["Topic Subscriber Manager"]
+            tsm1["动态订阅/取消订阅"]
+            tsm2["QoS 适配"]
+            tsm3["消息序列化"]
+        end
+
+        subgraph Managers["Managers"]
+            SM["Session Manager
+会话生命周期 / 元数据 / 并发"]
+            StM["Storage Manager
+文件写入 / 压缩编码 / 配额"]
+            TE["Trigger Engine
+手动触发 / 故障自动 / 任务自动"]
+        end
+
+        VLA["VLA Data Assembler
+图像+关节状态+语言指令 → VLA训练数据帧"]
+
+        subgraph DataPipeline["Data Pipeline"]
+            RS["RuleSubscriber
+订阅DRE触发 / 解析规则 / 启动录制"]
+            QS["QualityScorer
+对接DQF评分 / 质量分层 / 降采样标记"]
+            ME["MetadataEnricher
+规则触发原因 / 失效上下文 / 质量评分"]
+        end
+
+        subgraph Lifecycle["Lifecycle & Export"]
+            PRB["Pre-record Buffer
+环形缓冲 / 触发前数据"]
+            EM["Export Manager
+格式转换 / 云端上传 / 进度报告"]
+            LM["LifecycleManager
+高质量保留 / 低质量清理 / 过期删除"]
+        end
+
+        ROS2IF["ROS2 Service/Topic Interface"]
+    end
+
+    TSM --> VLA
+    SM --> VLA
+    StM --> VLA
+    TE --> VLA
+    VLA --> DataPipeline
+    DataPipeline --> Lifecycle
+    Lifecycle --> ROS2IF
 ```
 
 ### 5.2 关键设计决策
@@ -378,6 +418,11 @@ string message
 3. **压缩策略**：图像使用 H.264 硬件编码，点云使用 LZ4 压缩，其他数据 gzip
 4. **异步写入**：录制数据先写入内存缓冲，后台线程异步刷盘，避免阻塞订阅回调
 5. **VLA 帧对齐**：VLA 模式下按固定 10Hz 对齐图像和关节状态，语言指令通过 Service 注入
+6. **规则驱动采集**：RuleSubscriber 接收 Data Rule Engine 触发信号，自动启动带标签和时长的录制
+7. **质量分层存储**：QualityScorer 对接 Data Quality Filter，按 overall_score 将数据分为高质量(≥0.8)/中质量/低质量(<0.5)三级目录
+8. **自动语义标注**：MetadataEnricher 在录制完成后自动附加规则触发原因、失效上下文、质量评分到数据资产元数据
+9. **智能生命周期**：LifecycleManager 按质量等级设置不同的保留策略，高质量数据保留90天，低质量数据7天后自动清理
+10. **云端标准格式**：导出时支持觅蜂(mifeng_v1)和刻行(coScene_v1)标准格式，支持直接导入云端数据平台
 
 ### 5.3 关键流程
 
@@ -430,6 +475,50 @@ TE 启动 VLA 任务
       → 保存到 /opt/robot/data/vla/
 ```
 
+#### 5.3.4 规则驱动录制流程（新增）
+
+```
+Data Rule Engine 发布 RuleTriggerEvent
+  → RuleSubscriber 接收触发信号
+    → 解析规则参数（duration_before, duration_after, tags, priority）
+    → 若当前有冲突录制：
+        → 高优先级规则中断低优先级录制
+        → 低优先级规则排队等待
+    → 启动录制会话
+      → session_name = "rule_{rule_id}_{timestamp}"
+      → tags 附加规则名称和触发原因
+      → trigger_type = "rule_engine"
+    → 若规则指定 auto_upload=true：
+        → 录制完成后自动通知 Data Uploader
+```
+
+#### 5.3.5 质量分层存储流程（新增）
+
+```
+录制过程中接收 DataQualityFilter 的 DataQualityScore
+  → QualityScorer 按 overall_score 分级：
+    → score ≥ 0.8：高质量 → 存入 /data/high_quality/
+    → 0.5 ≤ score < 0.8：中等质量 → 存入 /data/medium_quality/
+    → score < 0.5：低质量 → 存入 /data/low_quality/（或丢弃）
+  → is_dirty == true：强制丢弃该帧
+  → is_redundant == true：降采样保留（每5帧保留1帧）
+  → 每帧的质量评分写入 mcap 附件或 sidecar JSON
+```
+
+#### 5.3.6 失效上下文录制流程（新增）
+
+```
+MC 检测到异常 → 触发 E-Stop
+  → MC 将 FailureCaptureBuffer 写入 /dr/failure_context Topic
+  → DR 接收 FailureContext 消息
+    → MetadataEnricher 将失效上下文附加到当前录制会话
+    → 自动标记 tag: ["failure", "auto_capture", "high_value"]
+    → quality_score = 1.0（失效数据为最高价值）
+    → 通知 Data Rule Engine 触发 failure_capture 规则
+    → 若当前未录制：启动紧急录制（前后各30秒）
+    → 标记为 priority=CRITICAL，通知 Data Uploader 优先上传
+```
+
 ---
 
 ## 6. 与其他模块的交互
@@ -447,6 +536,10 @@ TE 启动 VLA 任务
 | SM | SM → DR | `/sm/transition_event` (Topic) | 状态转换事件记录 |
 | HDS | HDS → DR | `/hds/health_report` (Topic) | 故障自动触发录制 |
 | Agent | Agent → DR | `/dr/vla_data_frame` 注入 | VLA 语言指令 |
+| Data Rule Engine | DRE → DR | `/data_rule_engine/rule_trigger_event` (Topic) | 规则驱动录制触发 |
+| Data Quality Filter | DQF → DR | `/data_quality/score` (Topic) | 逐帧质量评分 |
+| Data Uploader | DU → DR | `/data_uploader/upload_status` (Topic) | 上传完成通知（可清理本地副本） |
+| MC | MC → DR | `/dr/failure_context` (Topic) | 失效上下文数据 |
 | Setting | DR → Setting | `/setting/get_parameter` (Service) | 读取录制配置 |
 | EM | EM → DR | `/dr/get_health_status` (Service) | 健康检查 |
 
@@ -454,31 +547,26 @@ TE 启动 VLA 任务
 
 #### 时序：VLA 数据录制
 
-```
-TE            DR           Agent         MC       Camera
-  │             │            │            │          │
-  │─start_rec──►│            │            │          │
-  │  vla_mode   │            │            │          │
-  │             │            │            │          │
-  │             │─10Hz定时器─│            │          │
-  │             │            │            │          │
-  │             │─get_instruction───────►│            │
-  │             │◄─instruction───────────│            │
-  │             │            │            │          │
-  │             │─get_joint_state───────────────────►│
-  │             │◄─joint_state───────────────────────│
-  │             │            │            │          │
-  │             │─get_image────────────────────────────────────►│
-  │             │◄─image────────────────────────────────────────│
-  │             │            │            │          │
-  │             │─assemble_vla_frame─────│            │          │
-  │             │            │            │          │
-  │             │─save_to_mcap───────────│            │          │
-  │             │            │            │          │
-  │             │ ...（每100ms重复）      │            │          │
-  │             │            │            │          │
-  │─stop_rec───►│            │            │          │
-  │             │            │            │          │
+```mermaid
+sequenceDiagram
+    participant TE
+    participant DR
+    participant Agent
+    participant MC
+    participant Camera
+
+    TE->>DR: start_rec(vla_mode)
+    loop 每100ms (10Hz)
+        DR->>Agent: get_instruction
+        Agent-->>DR: instruction
+        DR->>MC: get_joint_state
+        MC-->>DR: joint_state
+        DR->>Camera: get_image
+        Camera-->>DR: image
+        DR->>DR: assemble_vla_frame
+        DR->>DR: save_to_mcap
+    end
+    TE->>DR: stop_rec
 ```
 
 ---
@@ -497,7 +585,15 @@ TE            DR           Agent         MC       Camera
 | `image_compression` | string | "h264" | 图像压缩（h264/mjpeg/none） |
 | `vla_frame_rate` | float | 10.0 | VLA 数据帧率 |
 | `max_concurrent_sessions` | int | 3 | 最大并发录制会话数 |
-| `retention_days` | int | 30 | 数据保留天数 |
+| `retention_days` | int | 30 | 数据保留天数（默认） |
+| `high_quality_retention_days` | int | 90 | 高质量数据保留天数 |
+| `low_quality_retention_days` | int | 7 | 低质量数据保留天数 |
+| `quality_score_threshold_high` | float | 0.8 | 高质量阈值 |
+| `quality_score_threshold_low` | float | 0.5 | 低质量阈值 |
+| `enable_rule_driven_recording` | bool | true | 是否启用规则驱动采集 |
+| `enable_metadata_enrichment` | bool | true | 是否启用自动语义标注 |
+| `cloud_format_support` | string[] | ["mifeng_v1", "coscene_v1"] | 支持的云端导出格式 |
+| `lifecycle_scan_interval_min` | int | 60 | 生命周期扫描间隔（分钟） |
 
 ---
 
@@ -535,6 +631,11 @@ uint16 ERR_NOT_RECORDING         = 13012   # 未在录制中
 | 13010 | ERR_VLA_ASSEMBLE_FAILED | VLA数据组装失败 | MEDIUM |
 | 13011 | ERR_ALREADY_RECORDING | 已在录制中 | LOW |
 | 13012 | ERR_NOT_RECORDING | 未在录制中 | LOW |
+| 13013 | ERR_RULE_TRIGGER_INVALID | 规则触发参数非法 | MEDIUM |
+| 13014 | ERR_QUALITY_SCORE_MISSING | 质量评分数据缺失 | LOW |
+| 13015 | ERR_LIFECYCLE_CLEAN_FAILED | 生命周期清理失败 | MEDIUM |
+| 13016 | ERR_METADATA_ENRICH_FAILED | 元数据增强失败 | LOW |
+| 13017 | ERR_CLOUD_FORMAT_EXPORT_FAILED | 云端标准格式导出失败 | MEDIUM |
 
 ---
 
@@ -553,53 +654,63 @@ uint16 ERR_NOT_RECORDING         = 13012   # 未在录制中
 
 ```
 dr_msgs/                # 消息定义包
-├── msg/
-│   ├── RecorderState.msg
-│   ├── RecordingSession.msg
-│   ├── VlaDataFrame.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── StartRecording.srv
-│   ├── StopRecording.srv
-│   ├── GetRecordingList.srv
-│   ├── ExportRecording.srv
-│   ├── DeleteRecording.srv
-│   └── TagRecording.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        RecorderState.msg
+        RecordingSession.msg
+        VlaDataFrame.msg
+        FailureContext.msg
+        DataAssetMetadata.msg
+        Heartbeat.msg
+    srv/
+        GetHealthStatus.srv
+        StartRecording.srv
+        StopRecording.srv
+        GetRecordingList.srv
+        ExportRecording.srv
+        DeleteRecording.srv
+        TagRecording.srv
+    CMakeLists.txt
+    package.xml
 
 dr/                     # 节点实现包
-├── include/dr/
-│   ├── dr_node.hpp
-│   ├── topic_subscriber_manager.hpp
-│   ├── session_manager.hpp
-│   ├── storage_manager.hpp
-│   ├── trigger_engine.hpp
-│   ├── vla_data_assembler.hpp
-│   ├── pre_record_buffer.hpp
-│   └── export_manager.hpp
-├── src/
-│   ├── dr_node.cpp
-│   ├── topic_subscriber_manager.cpp
-│   ├── session_manager.cpp
-│   ├── storage_manager.cpp
-│   ├── trigger_engine.cpp
-│   ├── vla_data_assembler.cpp
-│   ├── pre_record_buffer.cpp
-│   ├── export_manager.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_storage_manager.cpp
-│   ├── test_vla_assembler.cpp
-│   ├── test_trigger_engine.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── dr_params.yaml
-├── launch/
-│   └── dr.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/dr/
+        dr_node.hpp
+        topic_subscriber_manager.hpp
+        session_manager.hpp
+        storage_manager.hpp
+        trigger_engine.hpp
+        vla_data_assembler.hpp
+        pre_record_buffer.hpp
+        export_manager.hpp
+        rule_subscriber.hpp
+        quality_scorer.hpp
+        metadata_enricher.hpp
+        lifecycle_manager.hpp
+    src/
+        dr_node.cpp
+        topic_subscriber_manager.cpp
+        session_manager.cpp
+        storage_manager.cpp
+        trigger_engine.cpp
+        vla_data_assembler.cpp
+        pre_record_buffer.cpp
+        export_manager.cpp
+        rule_subscriber.cpp
+        quality_scorer.cpp
+        metadata_enricher.cpp
+        lifecycle_manager.cpp
+        main.cpp
+    test/
+        test_storage_manager.cpp
+        test_vla_assembler.cpp
+        test_trigger_engine.cpp
+        test_integration.cpp
+    config/
+        dr_params.yaml
+    launch/
+        dr.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ---
@@ -617,5 +728,70 @@ dr/                     # 节点实现包
 | 并发录制会话 | >= 3 | 同时进行的录制数 |
 | 数据保留完整性 | > 99.9% | 正常录制数据不损坏 |
 | 故障自动录制成功率 | > 95% | 故障触发自动录制的成功率 |
+| 规则触发响应延迟 | < 50ms | 从规则触发到开始录制 |
+| 质量评分处理延迟 | < 1ms | 单帧质量评分处理 |
+| 元数据增强成功率 | > 99% | 录制后自动附加元数据 |
 | CPU 占用 | < 10% | 全速录制时 |
 | 内存占用 | < 512MB | 含预录缓冲区 |
+
+---
+
+## 12. 数据生命周期管理（新增）
+
+### 12.1 分层存储策略
+
+DR 根据 Data Quality Filter 的 `overall_score` 将录制数据分为三层存储：
+
+```
+/opt/robot/data/
+    high_quality/        # score >= 0.8
+        vla_training/
+        failure_blackbox/
+        operation_log/
+    medium_quality/      # 0.5 <= score < 0.8
+        ...
+    low_quality/         # score < 0.5
+        ...
+```
+
+### 12.2 保留策略
+
+| 质量等级 | 保留天数 | 存储空间紧张时 |
+|---------|---------|---------------|
+| 高质量（failure_blackbox） | 180天 | 永不自动删除 |
+| 高质量（vla_training） | 90天 | 上传云端后可删除 |
+| 中等质量 | 30天 | 优先删除 |
+| 低质量 | 7天 | 立即删除 |
+
+### 12.3 清理流程
+
+```
+LifecycleManager 每小时扫描一次存储目录
+    ↓
+按质量等级和创建时间排序
+    ↓
+超出保留期的数据 → 标记为待清理
+    ↓
+已上传云端的数据 → 优先清理
+    ↓
+存储使用率 > 90% → 紧急清理低质量数据
+    ↓
+存储使用率 > 95% → 暂停新录制，清理中等质量数据
+    ↓
+记录清理日志（清理了哪些数据、释放了多少空间）
+```
+
+### 12.4 云端格式导出
+
+DR 支持将录制数据导出为云端数据平台的标准格式：
+
+**觅蜂格式（mifeng_v1）**：
+- 视频：H.265 MP4，1080p
+- 点云：LAS 格式
+- 关节状态：CSV
+- 元数据：JSON（含规则触发原因、质量评分、失效上下文）
+
+**刻行格式（coscene_v1）**：
+- 统一 MCAP 容器
+- 附加 coScene 标签规范
+- 支持场景切片和事件标记

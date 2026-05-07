@@ -1,0 +1,9 @@
+# Manually trigger upload of specified data asset
+
+string asset_id
+uint8 priority
+bool compressed                   # Whether to compress before upload
+---
+bool success
+string task_id
+string message

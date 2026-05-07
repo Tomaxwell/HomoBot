@@ -1,0 +1,15 @@
+# Large dataset upload (with progress feedback)
+
+string dataset_id
+string dataset_path
+string[] asset_ids
+bool delete_after_upload          # Delete local files after successful upload
+---
+bool success
+uint64 total_bytes_uploaded
+string[] failed_asset_ids
+---
+string current_asset_id
+float32 overall_progress
+float32 current_asset_progress
+uint64 bytes_uploaded_so_far

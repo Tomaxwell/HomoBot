@@ -53,54 +53,78 @@
 
 ### 2.2 状态机图
 
-```
-                                      boot_timeout (30s)
-                                 ┌──────────────────────────────┐
-                                 │                              ▼
-                           ┌─────────┐   all_ready    ┌─────────┐    ┌───────┐
-                power_on──►│ BOOTING │───────────────►│ STANDBY │◄───┤ FAULT │
-                           └─────────┘                └────┬────┘    └───▲───┘
-                                 │      critical_fail      │             │
-                                 ▼                         │      fault_event
-                           ┌───────┐      ┌───────────────┼─────────────┘
-                           │ FAULT │◄─────┤               │
-                           └───▲───┘      ▼               │
-                               │    ┌────────────┐        │
-                               └───┤ ACTIVE_STAND│◄───────┘
-                                   └──────┬──────┘
-                                          │
-          ┌──────────┬──────────┬─────────┼─────────┬──────────┬──────────┐
-          ▼          ▼          ▼         ▼         ▼          ▼          ▼
-    ┌─────────┐ ┌─────────┐ ┌────────┐ ┌──────┐ ┌────────┐ ┌────────────┐ ┌──────────┐
-    │ACTIVE   │ │ACTIVE   │ │ACTIVE  │ │ACTIVE│ │ACTIVE  │ │ACTIVE_ZERO │ │ACTIVE    │
-    │_READY   │ │_SQUAT   │ │_SIT    │ │_MOTION│ │_WALKING│ │_TORQUE     │ │_DAMPING  │
-    └────┬────┘ └────┬────┘ └───┬────┘ └──┬───┘ └───┬────┘ └─────┬──────┘ └────┬─────┘
-         │           │          │         │         │            │             │
-         └───────────┴──────────┴────┬────┴─────────┴────────────┴─────────────┘
-                                     │
-                                     ▼ e_stop (pri=100)
-                            ┌─────────────────┐
-                            │  ACTIVE_E_STOP  │
-                            └────────┬────────┘
-                                     │
-                        operator_release (人工)
-                                     │
-                                     ▼
-                              → ACTIVE_STAND
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> BOOTING : power_on
 
-    ┌─────────────┐
-    │  DEGRADED   │◄── non_critical_fail(from any non-FAULT state)
-    └──────┬──────┘
-           │ recovered → STANDBY
-           │ fault_escalate → FAULT
-           └───────────────────
+    state 启动与维护 {
+        BOOTING --> STANDBY : all_ready
+        BOOTING --> FAULT : boot_timeout(30s) / critical_fail
+        BOOTING --> SHUTTING_DOWN : shutdown
+        STANDBY --> CHARGING : charging_connect
+        STANDBY --> UPDATING : fota_start
+        STANDBY --> DEBUG : debug_enter
+        STANDBY --> SHUTTING_DOWN : shutdown
+        STANDBY --> FAULT : critical_fail
+        STANDBY --> DEGRADED : non_critical_fail
+        CHARGING --> STANDBY : charging_complete
+        CHARGING --> FAULT : battery_fault
+        CHARGING --> SHUTTING_DOWN : shutdown
+        UPDATING --> STANDBY : update_success
+        UPDATING --> FAULT : update_fail
+        UPDATING --> SHUTTING_DOWN : shutdown
+        DEBUG --> STANDBY : debug_exit
+        DEBUG --> SHUTTING_DOWN : shutdown
+    }
 
-    任意状态 ──shutdown──► SHUTTING_DOWN
-    CHARGING ◄── charging_connect ── STANDBY
-    UPDATING ◄── fota_start ── STANDBY
-    DEBUG    ◄── debug_enter ── STANDBY
+    state 运动状态 {
+        direction LR
+        [*] --> ACTIVE_STAND
+        ACTIVE_STAND --> ACTIVE_READY : ready
+        ACTIVE_STAND --> ACTIVE_SQUAT : squat
+        ACTIVE_STAND --> ACTIVE_SIT : sit
+        ACTIVE_STAND --> ACTIVE_ZERO_TORQUE : zero_torque
+        ACTIVE_STAND --> ACTIVE_DAMPING : damping
+        ACTIVE_READY --> ACTIVE_MOTION : motion
+        ACTIVE_READY --> ACTIVE_WALKING : walking
+        ACTIVE_READY --> ACTIVE_SQUAT : squat
+        ACTIVE_READY --> ACTIVE_SIT : sit
+        ACTIVE_MOTION --> ACTIVE_READY : motion_done
+        ACTIVE_MOTION --> ACTIVE_STAND : stand
+        ACTIVE_WALKING --> ACTIVE_READY : stop_walking
+        ACTIVE_WALKING --> ACTIVE_STAND : stand
+        ACTIVE_SQUAT --> ACTIVE_SIT : sit_down
+        ACTIVE_SQUAT --> ACTIVE_READY : ready
+        ACTIVE_SQUAT --> ACTIVE_STAND : stand_up
+        ACTIVE_SIT --> ACTIVE_SQUAT : rise
+        ACTIVE_SIT --> ACTIVE_READY : ready
+        ACTIVE_SIT --> ACTIVE_STAND : stand_up
+        ACTIVE_ZERO_TORQUE --> ACTIVE_DAMPING : damping
+        ACTIVE_ZERO_TORQUE --> ACTIVE_READY : ready
+        ACTIVE_ZERO_TORQUE --> ACTIVE_STAND : recover
+        ACTIVE_DAMPING --> ACTIVE_ZERO_TORQUE : zero_torque
+        ACTIVE_DAMPING --> ACTIVE_READY : ready
+        ACTIVE_DAMPING --> ACTIVE_STAND : recover
+    }
 
-    所有 ACTIVE_* 状态 ──e_stop(pri=100)──► ACTIVE_E_STOP
+    state 安全与故障 {
+        direction TB
+        ACTIVE_E_STOP --> ACTIVE_STAND : operator_release
+        ACTIVE_E_STOP --> FAULT : hardware_damage
+        DEGRADED --> STANDBY : recovered
+        DEGRADED --> FAULT : fault_escalate
+        FAULT --> STANDBY : acknowledge_fault
+        FAULT --> SHUTTING_DOWN : acknowledge_shutdown
+    }
+
+    STANDBY --> ACTIVE_STAND : activate
+    ACTIVE_STAND --> STANDBY : deactivate
+    运动状态 --> ACTIVE_E_STOP : e_stop(pri=100)
+    运动状态 --> FAULT : critical_fail
+    运动状态 --> DEGRADED : non_critical_fail
+    CHARGING --> ACTIVE_E_STOP : e_stop(pri=100)
+    SHUTTING_DOWN --> [*]
 ```
 
 ### 2.3 状态转换表
@@ -416,41 +440,34 @@ uint32 rejected_transitions         # 拒绝的转换次数
 
 ### 4.1 节点架构
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                     StateManagerNode                         │
-│                                                              │
-│  ┌────────────────┐   ┌──────────────────┐                   │
-│  │  FSM Engine    │   │  Transition      │                   │
-│  │  (状态机核心)  │   │  Validator       │                   │
-│  │                │   │  (转换校验器)    │                   │
-│  │  - 状态存储    │   │  - 合法性校验    │                   │
-│  │  - 转换执行    │   │  - 优先级仲裁    │                   │
-│  │  - 事件发布    │   │  - 前置条件检查  │                   │
-│  └───────┬────────┘   └────────┬─────────┘                   │
-│          │                     │                              │
-│  ┌───────▼─────────────────────▼─────────┐                   │
-│  │         Transition Queue              │                   │
-│  │   (优先级队列，高优先级抢占)          │                   │
-│  └───────────────────┬───────────────────┘                   │
-│                      │                                       │
-│  ┌───────────────────▼───────────────────┐                   │
-│  │         State Publisher               │                   │
-│  │  - /sm/robot_state (Transient Local)  │                   │
-│  │  - /sm/transition_event               │                   │
-│  └───────────────────────────────────────┘                   │
-│                                                              │
-│  ┌─────────────────┐   ┌─────────────────┐                   │
-│  │  E-Stop Handler │   │  Heartbeat      │                   │
-│  │  (急停快速路径) │   │  Timer (1Hz)    │                   │
-│  │  独立回调组     │   │                 │                   │
-│  └─────────────────┘   └─────────────────┘                   │
-│                                                              │
-│  ┌─────────────────┐   ┌─────────────────┐                   │
-│  │  Boot Watchdog  │   │  Config Manager │                   │
-│  │  (启动超时监控) │   │  (参数管理)     │                   │
-│  └─────────────────┘   └─────────────────┘                   │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph SMNode["StateManagerNode"]
+        FSM["FSM Engine
+(状态机核心)
+· 状态存储 / 转换执行 / 事件发布"]
+        Validator["Transition Validator
+(转换校验器)
+· 合法性校验 / 优先级仲裁 / 前置条件检查"]
+        Queue["Transition Queue
+(优先级队列，高优先级抢占)"]
+        Publisher["State Publisher
+· /sm/robot_state (Transient Local)
+· /sm/transition_event"]
+        EStop["E-Stop Handler
+(急停快速路径)
+· 独立回调组"]
+        Heartbeat["Heartbeat Timer (1Hz)"]
+        Watchdog["Boot Watchdog
+(启动超时监控)"]
+        Config["Config Manager
+(参数管理)"]
+
+        FSM --> Queue
+        Validator --> Queue
+        Queue --> Publisher
+        EStop --> FSM
+    end
 ```
 
 ### 4.2 关键设计决策
@@ -553,30 +570,25 @@ EM 启动 SM 进程
 
 #### 正常任务执行时序
 
-```
-  Gateway        TE          SM           MC           MP
-    │             │           │            │            │
-    │ activate    │           │            │            │
-    ├─────────────────────►   │            │            │
-    │             │   RequestTransition    │            │
-    │             │   (ACTIVE_STAND,pri=20) │            │
-    │             │           │            │            │
-    │             │   ◄─accepted─┤         │            │
-    │             │           │            │            │
-    │             │   RobotState=ACTIVE_STAND            │
-    │             │   ◄───────┤────────►   │────────►   │
-    │             │           │            │            │
-    │  start_task │           │            │            │
-    ├────────►    │           │            │            │
-    │             │ RequestTransition      │            │
-    │             │ (ACTIVE_MOTION,pri=40)   │            │
-    │             │   ◄─accepted─┤         │            │
-    │             │           │            │            │
-    │             │  IsMotionAllowed       │            │
-    │             │           │  ◄─────────┤            │
-    │             │           │──allowed──►│            │
-    │             │           │            │──execute──►│
-    │             │           │            │            │
+```mermaid
+sequenceDiagram
+    participant Gateway
+    participant TE
+    participant SM
+    participant MC
+    participant MP
+    Gateway->>SM: activate
+    TE->>SM: RequestTransition (ACTIVE_STAND, pri=20)
+    SM-->>TE: accepted
+    SM->>TE: RobotState=ACTIVE_STAND
+    SM->>MC: RobotState=ACTIVE_STAND
+    SM->>MP: RobotState=ACTIVE_STAND
+    Gateway->>TE: start_task
+    TE->>SM: RequestTransition (ACTIVE_MOTION, pri=40)
+    SM-->>TE: accepted
+    MC->>SM: IsMotionAllowed
+    SM-->>MC: allowed
+    MC->>MP: execute
 ```
 
 ---
@@ -679,46 +691,46 @@ state_manager:
 
 ```
 sm_msgs/
-├── msg/
-│   ├── RobotState.msg              # 机器人全局状态
-│   ├── TransitionEvent.msg         # 状态转换事件
-│   ├── Heartbeat.msg               # SM 心跳
-│   └── ErrorCode.msg               # 错误码定义（原名 SmErrorCode.msg）
-├── srv/
-│   ├── RequestTransition.srv       # 请求状态转换
-│   ├── GetState.srv                # 查询当前状态
-│   ├── TriggerEStop.srv            # 触发急停
-│   ├── ReleaseEStop.srv            # 解除急停
-│   ├── AcknowledgeFault.srv        # 确认故障
-│   ├── IsMotionAllowed.srv         # 运动前校验
-│   └── GetHealthStatus.srv         # 健康状态查询
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        RobotState.msg              # 机器人全局状态
+        TransitionEvent.msg         # 状态转换事件
+        Heartbeat.msg               # SM 心跳
+        ErrorCode.msg               # 错误码定义（原名 SmErrorCode.msg）
+    srv/
+        RequestTransition.srv       # 请求状态转换
+        GetState.srv                # 查询当前状态
+        TriggerEStop.srv            # 触发急停
+        ReleaseEStop.srv            # 解除急停
+        AcknowledgeFault.srv        # 确认故障
+        IsMotionAllowed.srv         # 运动前校验
+        GetHealthStatus.srv         # 健康状态查询
+    CMakeLists.txt
+    package.xml
 
 sm/
-├── include/sm/
-│   ├── state_manager_node.hpp      # 主节点类
-│   ├── fsm_engine.hpp              # FSM 引擎（状态存储 + 转换执行）
-│   ├── transition_validator.hpp    # 转换校验器（合法性 + 优先级 + 前置条件）
-│   ├── estop_handler.hpp           # 急停快速路径处理
-│   └── boot_watchdog.hpp           # 启动超时监控
-├── src/
-│   ├── state_manager_node.cpp
-│   ├── fsm_engine.cpp
-│   ├── transition_validator.cpp
-│   ├── estop_handler.cpp
-│   └── boot_watchdog.cpp
-├── test/
-│   ├── test_fsm_engine.cpp         # FSM 转换表单元测试
-│   ├── test_transition_validator.cpp # 校验器单元测试
-│   ├── test_estop_handler.cpp      # E-Stop 路径测试
-│   └── test_integration.cpp        # 集成测试（多模块交互）
-├── config/
-│   └── sm_params.yaml              # 参数配置
-├── launch/
-│   └── sm.launch.py                # Launch 文件
-├── CMakeLists.txt
-└── package.xml
+    include/sm/
+        state_manager_node.hpp      # 主节点类
+        fsm_engine.hpp              # FSM 引擎（状态存储 + 转换执行）
+        transition_validator.hpp    # 转换校验器（合法性 + 优先级 + 前置条件）
+        estop_handler.hpp           # 急停快速路径处理
+        boot_watchdog.hpp           # 启动超时监控
+    src/
+        state_manager_node.cpp
+        fsm_engine.cpp
+        transition_validator.cpp
+        estop_handler.cpp
+        boot_watchdog.cpp
+    test/
+        test_fsm_engine.cpp         # FSM 转换表单元测试
+        test_transition_validator.cpp # 校验器单元测试
+        test_estop_handler.cpp      # E-Stop 路径测试
+        test_integration.cpp        # 集成测试（多模块交互）
+    config/
+        sm_params.yaml              # 参数配置
+    launch/
+        sm.launch.py                # Launch 文件
+    CMakeLists.txt
+    package.xml
 ```
 
 ---

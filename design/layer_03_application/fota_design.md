@@ -34,18 +34,17 @@
 
 FOTA 在端侧架构中的位置：
 
-```
-┌─────────────────────────────────────────────┐
-│              云端平台 / APP                   │
-├─────────────────────────────────────────────┤
-│              Gateway                          │
-├─────────────────────────────────────────────┤
-│  FOTA（本模块）  Setting   DR   RC           │  ← 应用层
-├─────────────────────────────────────────────┤
-│  SM    EM    HDS                            │  ← 中间件层
-├─────────────────────────────────────────────┤
-│  HAL_EtherCAT                               │  ← HAL层
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Cloud["云端平台 / APP"]
+    Gateway["Gateway"]
+    AppLayer["FOTA（本模块）/ Setting / DR / RC
+应用层"]
+    Middleware["SM / EM / HDS
+中间件层"]
+    HAL["HAL_EtherCAT
+HAL层"]
+    Cloud --> Gateway --> AppLayer --> Middleware --> HAL
 ```
 
 **FOTA 不做的事情**（红线）：
@@ -76,44 +75,20 @@ FOTA 在端侧架构中的位置：
 
 ### 3.2 状态转换图
 
+```mermaid
+stateDiagram-v2
+    [*] --> FOTA_IDLE : start_upgrade
+    FOTA_IDLE --> FOTA_DOWNLOADING : start_upgrade
+    FOTA_DOWNLOADING --> FOTA_DOWNLOADING : download_fail
+    FOTA_DOWNLOADING --> FOTA_VERIFYING : success
+    FOTA_VERIFYING --> FOTA_DOWNLOADING : verify_fail
+    FOTA_VERIFYING --> FOTA_UPDATING : verify_success
+    FOTA_UPDATING --> FOTA_ROLLBACK : update_fail
+    FOTA_UPDATING --> FOTA_REBOOTING : update_success
+    FOTA_REBOOTING --> FOTA_IDLE : reboot_complete
+    FOTA_ROLLBACK --> FOTA_IDLE : rollback_complete
+    FOTA_REBOOTING --> FOTA_ROLLBACK : reboot_fail
 ```
-                          ┌───────────────────────────────────────────┐
-                          │                                           │
-                    ┌─────┴──────┐  start_upgrade   ┌────────────────┴───┐
-              ┌──►  │  FOTA_IDLE │─────────────────►│ FOTA_DOWNLOADING   │
-              │     │     0      │                  │        1           │
-              │     └────────────┘                  └────────┬───────────┘
-              │           ▲                                │
-              │           │         download_fail          │ success
-              │           │    ┌───────────────────────────┘
-              │           │    ▼
-              │           │  ┌──────────────────┐   verify_success   ┌───────────────┐
-              │           │  │ FOTA_VERIFYING   │──────────────────►│ FOTA_PREPARING│
-              │           │  │        2         │                   │       3       │
-              │           │  └────────┬─────────┘                   └───────┬───────┘
-              │           │           │ verify_fail                      │ prepare_ok
-              │           │    ┌──────┘                                  │
-              │           │    ▼                                          ▼
-              │           │  ┌──────────────────┐                ┌───────────────┐
-              │           └──│   FOTA_FAILED    │◄───────────────│ FOTA_UPDATING │
-              │              │        7         │   update_fail   │       4       │
-              │              └────────┬─────────┘                 └───────┬───────┘
-              │                       │                                 │ update_ok
-              │              rollback_fail                             │
-              │                       │                                 ▼
-              │                       ▼                        ┌───────────────┐
-              │              ┌──────────────────┐              │ FOTA_REBOOTING│
-              └─────────────│ FOTA_ROLLING_BACK│              │       5       │
-                            │        8         │              └───────┬───────┘
-                            └────────┬─────────┘                      │ reboot_ok
-                                     │                                ▼
-                                     └────────────────────────────►┌───────────────┐
-                                                                   │ FOTA_COMPLETED│
-                                                                   │       6       │
-                                                                   └───────────────┘
-```
-
-### 3.3 状态转换表
 
 | 当前状态 | 目标状态 | 触发条件 | 优先级 | 说明 |
 |----------|----------|----------|--------|------|
@@ -298,44 +273,34 @@ FirmwareVersion[] versions
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         FotaNode                                     │
-│                                                                      │
-│  ┌──────────────────┐    ┌──────────────────┐                       │
-│  │  Upgrade State   │    │  Download        │                       │
-│  │  Machine         │    │  Manager         │                       │
-│  │  (升级状态机)     │    │  (下载管理)       │                       │
-│  │                  │    │                  │                       │
-│  │  - 状态跟踪      │    │  - HTTP下载      │                       │
-│  │  - 转换控制      │    │  - 断点续传      │                       │
-│  │  - 异常处理      │    │  - 进度回调      │                       │
-│  └────────┬─────────┘    └────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼───────────────────────▼─────────┐                       │
-│  │         Package Validator                 │                       │
-│  │   (SHA256校验 → 签名验证 → 版本兼容检查)   │                       │
-│  └────────┬───────────────────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼─────────┐   ┌─────────▼────────┐                       │
-│  │  Installer       │   │  Rollback        │                       │
-│  │  (安装器)         │   │  Manager         │                       │
-│  │                  │   │  (回滚管理)       │                       │
-│  │  - A/B分区切换   │   │                  │                       │
-│  │  - 应用热更新    │   │  - 备份镜像      │                       │
-│  │  - 从站烧录      │   │  - 恢复流程      │                       │
-│  │  - 重启协调      │   │  - 失败上报      │                       │
-│  └────────┬─────────┘   └─────────┬────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼───────────────────────▼─────────┐                       │
-│  │         Version Manager                   │                       │
-│  │   (版本记录 → 历史管理 → 兼容性检查)       │                       │
-│  └───────────────────────────────────────────┘                       │
-│                                                                       │
-│  ┌─────────────────────────────────────────┐                        │
-│  │  ROS2 Service/Topic Interface           │                        │
-│  └─────────────────────────────────────────┘                        │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph FotaNode
+        SM["Upgrade State Machine
+(升级状态机)
+· 状态跟踪 / 转换控制 / 异常处理"]
+        DL["Download Manager
+(下载管理)
+· HTTP下载 / 断点续传 / 进度回调"]
+        Validator["Package Validator
+(SHA256校验 → 签名验证 → 版本兼容检查)"]
+        Installer["Installer
+(安装器)
+· A/B分区切换 / 应用热更新 / 从站烧录 / 重启协调"]
+        Rollback["Rollback Manager
+(回滚管理)
+· 备份镜像 / 恢复流程 / 失败上报"]
+        Version["Version Manager
+(版本记录 → 历史管理 → 兼容性检查)"]
+        ROS2IF["ROS2 Service/Topic Interface"]
+
+        SM --> Validator
+        DL --> Validator
+        Validator --> Installer
+        Validator --> Rollback
+        Installer --> Version
+        Rollback --> Version
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -429,49 +394,37 @@ Download Manager / Installer 报告进度
 
 #### 时序：完整OTA升级
 
-```
-云端         Gateway      FOTA        SM        Installer     EM
- │            │            │           │            │           │
- │─OTA指令───►│            │           │            │           │
- │            │─start_up──►│           │            │           │
- │            │            │           │            │           │
- │            │            │─req_transition─►│      │           │
- │            │            │             │      │           │
- │            │            │◄──accepted──│      │           │
- │            │            │   (UPDATING)│      │           │
- │            │            │           │            │           │
- │            │◄─accepted──│           │            │           │
- │◄─开始下载───│            │           │            │           │
- │            │            │           │            │           │
- │            │            │─req_dl────►│(Gateway下载)          │
- │            │            │◄──文件路径─│            │           │
- │            │            │           │            │           │
- │            │            │─验证─────►│            │           │
- │            │            │◄──通过────│            │           │
- │            │            │           │            │           │
- │            │            │─备份─────►│            │           │
- │            │            │           │            │           │
- │            │            │─安装─────►│            │           │
- │            │            │           │─执行安装──►│           │
- │            │            │           │            │           │
- │            │◄─进度──────│           │            │           │
- │◄─进度───────│            │           │            │           │
- │            │            │           │            │           │
- │            │            │           │◄──完成────│           │
- │            │            │           │            │           │
- │            │            │           │─重启节点──►│           │
- │            │            │           │            │           │
- │            │            │           │            │─停止旧版─►│
- │            │            │           │            │─启动新版─►│
- │            │            │           │            │           │
- │            │            │─健康检查──►│            │           │
- │            │            │◄──健康────│            │           │
- │            │            │           │            │           │
- │            │            │─req_transition─►│      │           │
- │            │            │             │      │           │
- │            │            │◄──恢复STANDBY│      │           │
- │            │            │           │            │           │
- │◄─升级完成───│            │           │            │           │
+```mermaid
+sequenceDiagram
+    participant Cloud as 云端
+    participant Gateway
+    participant FOTA
+    participant SM
+    participant Installer
+    participant EM
+    Cloud->>Gateway: OTA指令
+    Gateway->>FOTA: start_up
+    FOTA->>SM: req_transition
+    SM-->>FOTA: accepted (UPDATING)
+    Gateway-->>Cloud: 开始下载
+    FOTA->>Gateway: req_dl
+    Gateway-->>FOTA: 文件路径
+    FOTA->>Gateway: 验证
+    Gateway-->>FOTA: 通过
+    FOTA->>Gateway: 备份
+    FOTA->>Installer: 安装
+    Installer->>EM: 执行安装
+    Gateway-->>FOTA: 进度
+    Cloud-->>Gateway: 进度
+    Installer-->>FOTA: 完成
+    FOTA->>EM: 重启节点
+    EM->>EM: 停止旧版
+    EM->>EM: 启动新版
+    FOTA->>Gateway: 健康检查
+    Gateway-->>FOTA: 健康
+    FOTA->>SM: req_transition
+    SM-->>FOTA: 恢复STANDBY
+    Gateway-->>Cloud: 升级完成
 ```
 
 ---
@@ -552,50 +505,50 @@ uint16 ERR_NETWORK_ERROR           = 14015   # 网络错误
 
 ```
 fota_msgs/              # 消息定义包
-├── msg/
-│   ├── UpgradeState.msg
-│   ├── UpgradeProgress.msg
-│   ├── FirmwareVersion.msg
-│   ├── UpgradePackageInfo.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── StartUpgrade.srv
-│   ├── GetUpgradeStatus.srv
-│   ├── CancelUpgrade.srv
-│   └── GetFirmwareVersion.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        UpgradeState.msg
+        UpgradeProgress.msg
+        FirmwareVersion.msg
+        UpgradePackageInfo.msg
+        Heartbeat.msg
+    srv/
+        GetHealthStatus.srv
+        StartUpgrade.srv
+        GetUpgradeStatus.srv
+        CancelUpgrade.srv
+        GetFirmwareVersion.srv
+    CMakeLists.txt
+    package.xml
 
 fota/                   # 节点实现包
-├── include/fota/
-│   ├── fota_node.hpp
-│   ├── upgrade_state_machine.hpp
-│   ├── download_manager.hpp
-│   ├── package_validator.hpp
-│   ├── installer.hpp
-│   ├── rollback_manager.hpp
-│   └── version_manager.hpp
-├── src/
-│   ├── fota_node.cpp
-│   ├── upgrade_state_machine.cpp
-│   ├── download_manager.cpp
-│   ├── package_validator.cpp
-│   ├── installer.cpp
-│   ├── rollback_manager.cpp
-│   ├── version_manager.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_state_machine.cpp
-│   ├── test_package_validator.cpp
-│   ├── test_installer.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── fota_params.yaml
-├── launch/
-│   └── fota.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/fota/
+        fota_node.hpp
+        upgrade_state_machine.hpp
+        download_manager.hpp
+        package_validator.hpp
+        installer.hpp
+        rollback_manager.hpp
+        version_manager.hpp
+    src/
+        fota_node.cpp
+        upgrade_state_machine.cpp
+        download_manager.cpp
+        package_validator.cpp
+        installer.cpp
+        rollback_manager.cpp
+        version_manager.cpp
+        main.cpp
+    test/
+        test_state_machine.cpp
+        test_package_validator.cpp
+        test_installer.cpp
+        test_integration.cpp
+    config/
+        fota_params.yaml
+    launch/
+        fota.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ---

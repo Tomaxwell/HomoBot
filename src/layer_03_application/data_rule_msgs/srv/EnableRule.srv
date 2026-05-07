@@ -1,0 +1,7 @@
+# Enable/disable specified rule
+
+string rule_id
+bool enabled
+---
+bool success
+string message

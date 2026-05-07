@@ -1,0 +1,9 @@
+# Query upload queue status
+
+---
+bool success
+data_uploader_msgs/UploadStatus[] tasks
+uint32 total_pending
+uint32 total_uploading
+uint32 total_completed_today
+uint64 total_bytes_uploaded_today

@@ -30,22 +30,24 @@
 
 HDS 在端侧架构中的位置：
 
-```
-┌─────────────┐
-│   Gateway   │  ← 云端/APP 通信（唯一云端出口）
-├─────────────┤
-│     SM      │  ← 状态机决策（FSM 唯一权威）
-├─────────────┤
-│     TE      │  ← 任务调度
-├─────────────┤
-│   HDS（本模块）│  ← 故障诊断与定级（唯一定级权威）
-├─────────────┤
-│     EM      │  ← 无状态执行器
-├─────────────┤
-│  各业务模块  │  ← 只上报原始健康数据
-├─────────────┤
-│    HAL      │  ← 硬件抽象
-└─────────────┘
+```mermaid
+flowchart TB
+    Gateway["Gateway
+云端/APP 通信（唯一云端出口）"]
+    SM["SM
+状态机决策（FSM 唯一权威）"]
+    TE["TE
+任务调度"]
+    HDS["HDS（本模块）
+故障诊断与定级（唯一定级权威）"]
+    EM["EM
+无状态执行器"]
+    Modules["各业务模块
+只上报原始健康数据"]
+    HAL["HAL
+硬件抽象"]
+
+    Gateway --> SM --> TE --> HDS --> EM --> Modules --> HAL
 ```
 
 | 层次 | 模块 | 职责范围 |
@@ -81,25 +83,16 @@ HDS 维护每个被监控实体（模块/进程/硬件）的**诊断状态**（D
 
 ### 3.2 诊断状态流转
 
-```
-           data_timeout
-    ┌────────────────────────┐
-    │                        ▼
-┌─────────┐   anomaly    ┌─────────┐   escalate   ┌─────────┐
-│ HEALTHY │─────────────►│ WARNING │─────────────►│DEGRADED │
-└────┬────┘              └────┬────┘              └────┬────┘
-     │    recovered            │    escalate            │
-     │◄────────────────────────┤◄───────────────────────┤
-     │                         │                        │
-     │                         │                        │ escalate
-     │                         │                        ▼
-     │                         │                   ┌─────────┐
-     │                         │                   │  FAULT  │
-     │                         │                   └────┬────┘
-     │                         │                        │
-     │                         │◄───────────────────────┘
-     │                         │     recovered (人工确认后)
-     └─────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> HEALTHY
+    HEALTHY --> WARNING : anomaly
+    HEALTHY --> HEALTHY : data_timeout
+    WARNING --> DEGRADED : escalate
+    WARNING --> HEALTHY : recovered
+    DEGRADED --> FAULT : escalate
+    DEGRADED --> WARNING : escalate
+    FAULT --> WARNING : recovered (人工确认后)
 ```
 
 ### 3.3 状态转换规则
@@ -359,58 +352,39 @@ uint16 error_code                    # 错误码
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    HealthDiagnosisSystemNode                        │
-│                                                                     │
-│  ┌──────────────────┐   ┌──────────────────┐                       │
-│  │  Health Data     │   │  Entity          │                       │
-│  │  Collector       │   │  Registry        │                       │
-│  │  (数据汇聚)      │   │  (实体注册表)    │                       │
-│  │                  │   │                  │                       │
-│  │  - Topic 订阅    │   │  - 实体元数据    │                       │
-│  │  - Service 接收  │   │  - 期望上报间隔  │                       │
-│  │  - 数据缓存      │   │  - 最后上报时间  │                       │
-│  └────────┬─────────┘   └────────┬─────────┘                       │
-│           │                      │                                  │
-│  ┌────────▼──────────────────────▼─────────┐                       │
-│  │         Diagnosis Engine                │                       │
-│  │   (规则引擎 + 趋势分析 + 关联聚合)       │                       │
-│  │                                          │                       │
-│  │  - Rule Evaluator: 阈值/时序规则匹配     │                       │
-│  │  - Trend Analyzer: 滑动窗口趋势检测      │                       │
-│  │  - Correlator:     多实体关联分析        │                       │
-│  │  - Severity Mapper: 定级决策             │                       │
-│  └──────────────────┬──────────────────────┘                       │
-│                     │                                               │
-│  ┌──────────────────▼──────────────────────┐                       │
-│  │         State Transition Arbiter        │                       │
-│  │   (定级 → SM 状态转换请求决策)          │                       │
-│  │                                          │                       │
-│  │  - 定级变化检测                          │                       │
-│  │  - SM 转换请求决策（是否请求、请求什么） │                       │
-│  │  - 去抖/防抖（避免频繁转换）             │                       │
-│  └──────────────────┬──────────────────────┘                       │
-│                     │                                               │
-│  ┌──────────────────▼──────────────────────┐                       │
-│  │         Alarm Manager                   │                       │
-│  │   (告警去重、抑制、恢复通知)            │                       │
-│  └──────────────────┬──────────────────────┘                       │
-│                     │                                               │
-│  ┌────────┬─────────┴──────────┬──────────────┐                   │
-│  │        │                    │              │                   │
-│  │   ┌────▼────┐      ┌───────▼──────┐  ┌────▼────┐              │
-│  │   │  State  │      │   Alarm      │  │Diagnosis│              │
-│  │   │Publisher│      │   Publisher  │  │ Chain   │              │
-│  │   │         │      │              │  │Publisher│              │
-│  │   └─────────┘      └──────────────┘  └─────────┘              │
-│  │                                                                 │
-│  │  ┌─────────────────┐   ┌─────────────────┐                     │
-│  │  │  Recovery       │   │  Heartbeat      │                     │
-│  │  │  Check Handler  │   │  Timer (1Hz)    │                     │
-│  │  │  (恢复前检查)   │   │                 │                     │
-│  │  └─────────────────┘   └─────────────────┘                     │
-│  └─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HDSNode["HealthDiagnosisSystemNode"]
+        Collector["Health Data Collector
+(数据汇聚)
+· Topic订阅 / Service接收 / 数据缓存"]
+        Registry["Entity Registry
+(实体注册表)
+· 实体元数据 / 期望上报间隔 / 最后上报时间"]
+        Engine["Diagnosis Engine
+(规则引擎 + 趋势分析 + 关联聚合)
+· Rule Evaluator / Trend Analyzer
+· Correlator / Severity Mapper"]
+        Arbiter["State Transition Arbiter
+(定级 → SM 状态转换请求决策)
+· 定级变化检测 / 去抖防抖"]
+        AlarmMgr["Alarm Manager
+(告警去重、抑制、恢复通知)"]
+        StatePub["State Publisher"]
+        AlarmPub["Alarm Publisher"]
+        DiagPub["Diagnosis Chain Publisher"]
+        Recovery["Recovery Check Handler
+(恢复前检查)"]
+        Heartbeat["Heartbeat Timer (1Hz)"]
+
+        Collector --> Engine
+        Registry --> Engine
+        Engine --> Arbiter
+        Arbiter --> AlarmMgr
+        AlarmMgr --> StatePub
+        AlarmMgr --> AlarmPub
+        AlarmMgr --> DiagPub
+    end
 ```
 
 ### 5.2 关键组件说明
@@ -554,32 +528,21 @@ Entity Registry 定时扫描（1Hz）
 
 #### 故障检测与定级时序
 
-```
-   MC          EM           HDS           SM         Gateway
-    │            │            │            │            │
-    │ crash      │            │            │            │
-    ├──►         │            │            │            │
-    │            │ detect     │            │            │
-    │            ├────────►   │            │            │
-    │            │            │            │            │
-    │            │ health_report            │            │
-    │            ├───────────────►          │            │
-    │            │            │            │            │
-    │            │            │ diagnose   │            │
-    │            │            │ (FAULT)    │            │
-    │            │            │            │            │
-    │            │            │ request_transition     │
-    │            │            ├───────────────►        │
-    │            │            │            │            │
-    │            │            │◄──accepted─┤            │
-    │            │            │            │            │
-    │            │            │ robot_state(FAULT)     │
-    │            │            │◄───────────┤            │
-    │            │            │            │            │
-    │            │            │ alarm_event             │
-    │            │            ├────────────────────────►│
-    │            │            │            │            │
-    │            │            │            │            │─► 云端
+```mermaid
+sequenceDiagram
+    participant MC
+    participant EM
+    participant HDS
+    participant SM
+    participant GW as Gateway
+    MC->>EM: crash
+    EM->>HDS: health_report
+    HDS->>HDS: diagnose (FAULT)
+    HDS->>SM: request_transition
+    SM-->>HDS: accepted
+    SM-->>HDS: robot_state(FAULT)
+    HDS->>GW: alarm_event
+    GW->>GW: 云端
 ```
 
 ---
@@ -748,60 +711,60 @@ diagnosis_rules:
 
 ```
 hds_msgs/
-├── msg/
-│   ├── DiagnosisState.msg          # 诊断状态
-│   ├── HealthReport.msg            # 健康报告
-│   ├── HealthMetric.msg            # 健康指标
-│   ├── AlarmEvent.msg              # 告警事件
-│   ├── DiagnosisChain.msg          # 诊断链路
-│   ├── DiagnosisStep.msg           # 诊断步骤
-│   ├── Heartbeat.msg               # HDS 心跳（原名 HdsHeartbeat.msg）
-│   └── ErrorCode.msg               # 错误码（原名 HdsErrorCode.msg）
-├── srv/
-│   ├── QueryDiagnosis.srv          # 查询诊断状态
-│   ├── ReportHealth.srv            # 上报健康数据
-│   ├── RecoveryCheck.srv           # 恢复前检查
-│   ├── GetSystemHealth.srv         # 全系统健康查询
-│   └── RegisterHealthEntity.srv    # 注册监控实体
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        DiagnosisState.msg          # 诊断状态
+        HealthReport.msg            # 健康报告
+        HealthMetric.msg            # 健康指标
+        AlarmEvent.msg              # 告警事件
+        DiagnosisChain.msg          # 诊断链路
+        DiagnosisStep.msg           # 诊断步骤
+        Heartbeat.msg               # HDS 心跳（原名 HdsHeartbeat.msg）
+        ErrorCode.msg               # 错误码（原名 HdsErrorCode.msg）
+    srv/
+        QueryDiagnosis.srv          # 查询诊断状态
+        ReportHealth.srv            # 上报健康数据
+        RecoveryCheck.srv           # 恢复前检查
+        GetSystemHealth.srv         # 全系统健康查询
+        RegisterHealthEntity.srv    # 注册监控实体
+    CMakeLists.txt
+    package.xml
 
 hds/
-├── include/hds/
-│   ├── health_diagnosis_node.hpp   # 主节点类
-│   ├── health_data_collector.hpp   # 健康数据汇聚器
-│   ├── entity_registry.hpp         # 实体注册表
-│   ├── diagnosis_engine.hpp        # 诊断引擎
-│   ├── rule_evaluator.hpp          # 规则评估器
-│   ├── trend_analyzer.hpp          # 趋势分析器
-│   ├── severity_mapper.hpp         # 严重度映射器
-│   ├── state_transition_arbiter.hpp # 状态转换仲裁器
-│   ├── alarm_manager.hpp           # 告警管理器
-│   └── recovery_check_handler.hpp  # 恢复前检查处理器
-├── src/
-│   ├── health_diagnosis_node.cpp
-│   ├── health_data_collector.cpp
-│   ├── entity_registry.cpp
-│   ├── diagnosis_engine.cpp
-│   ├── rule_evaluator.cpp
-│   ├── trend_analyzer.cpp
-│   ├── severity_mapper.cpp
-│   ├── state_transition_arbiter.cpp
-│   ├── alarm_manager.cpp
-│   └── recovery_check_handler.cpp
-├── test/
-│   ├── test_rule_evaluator.cpp     # 规则引擎单元测试
-│   ├── test_diagnosis_engine.cpp   # 诊断引擎测试
-│   ├── test_alarm_manager.cpp      # 告警管理器测试
-│   ├── test_recovery_check.cpp     # 恢复前检查测试
-│   └── test_integration.cpp        # 集成测试（HDS-SM 交互）
-├── config/
-│   ├── hds_params.yaml             # 参数配置
-│   └── hds_rules.yaml              # 诊断规则配置
-├── launch/
-│   └── hds.launch.py               # Launch 文件
-├── CMakeLists.txt
-└── package.xml
+    include/hds/
+        health_diagnosis_node.hpp   # 主节点类
+        health_data_collector.hpp   # 健康数据汇聚器
+        entity_registry.hpp         # 实体注册表
+        diagnosis_engine.hpp        # 诊断引擎
+        rule_evaluator.hpp          # 规则评估器
+        trend_analyzer.hpp          # 趋势分析器
+        severity_mapper.hpp         # 严重度映射器
+        state_transition_arbiter.hpp # 状态转换仲裁器
+        alarm_manager.hpp           # 告警管理器
+        recovery_check_handler.hpp  # 恢复前检查处理器
+    src/
+        health_diagnosis_node.cpp
+        health_data_collector.cpp
+        entity_registry.cpp
+        diagnosis_engine.cpp
+        rule_evaluator.cpp
+        trend_analyzer.cpp
+        severity_mapper.cpp
+        state_transition_arbiter.cpp
+        alarm_manager.cpp
+        recovery_check_handler.cpp
+    test/
+        test_rule_evaluator.cpp     # 规则引擎单元测试
+        test_diagnosis_engine.cpp   # 诊断引擎测试
+        test_alarm_manager.cpp      # 告警管理器测试
+        test_recovery_check.cpp     # 恢复前检查测试
+        test_integration.cpp        # 集成测试（HDS-SM 交互）
+    config/
+        hds_params.yaml             # 参数配置
+        hds_rules.yaml              # 诊断规则配置
+    launch/
+        hds.launch.py               # Launch 文件
+    CMakeLists.txt
+    package.xml
 ```
 
 ---

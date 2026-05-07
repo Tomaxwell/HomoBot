@@ -58,43 +58,22 @@
 
 ### 3.2 状态转换图
 
-```
-                              ┌───────────────────────────────────────────────┐
-                              │                                               │
-                        ┌─────┴──────┐   load_motion     ┌───────────────────┴───┐
-                  ┌──►  │   MP_IDLE  │──────────────────►│      MP_LOADING       │
-                  │     │     0      │                   │         1             │
-                  │     └────────────┘                   └───────────┬───────────┘
-                  │           ▲                                      │
-                  │           │         load_success                 │
-                  │           │    ┌─────────────────────────────────┘
-                  │           │    ▼
-                  │           │  ┌──────────────────┐   play      ┌───────────┐
-                  │           │  │     MP_READY     │────────────►│ MP_PLAYING│
-                  │           │  │        2         │             │     3     │
-                  │           │  └────────┬─────────┘             └─────┬─────┘
-                  │           │           │ pause                     │
-                  │           │    ┌──────┘                           │ stop
-                  │           │    ▼                                 │
-                  │           │  ┌──────────────────┐                │
-                  │           │  │    MP_PAUSED     │◄───────────────┘
-                  │           │  │        4         │
-                  │           │  └────────┬─────────┘
-                  │           │           │ resume
-                  │           │           └────────────────────────►
-                  │           │
-                  │           │  ┌───────────────────────────────────────────────┐
-                  │           │  │                                               │
-                  │           └──│  finish / error / stop                        │
-                  │              │       ▼                                       │
-                  │              │  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-                  │              │  │MP_COMPLETED│  │ MP_STOPPED │  │ MP_ERROR │   │
-                  │              │  │     5     │  │     6     │  │    7    │   │
-                  │              │  └─────┬─────┘  └─────┬─────┘  └────┬───┘   │
-                  │              │        │              │             │       │
-                  │              └────────┴──────────────┴─────────────┘───────┘
-                  │
-                  └────────────────────────────────────────────────────────────────►
+```mermaid
+stateDiagram-v2
+    [*] --> MP_IDLE
+    MP_IDLE --> MP_LOADING : load_motion
+    MP_LOADING --> MP_READY : load_success
+    MP_READY --> MP_PLAYING : play
+    MP_PLAYING --> MP_PAUSED : pause
+    MP_PAUSED --> MP_PLAYING : resume
+    MP_PLAYING --> MP_COMPLETED : finish
+    MP_PLAYING --> MP_STOPPED : stop
+    MP_PLAYING --> MP_ERROR : error
+    MP_PAUSED --> MP_STOPPED : stop
+    MP_PAUSED --> MP_ERROR : error
+    MP_COMPLETED --> MP_IDLE : reset
+    MP_STOPPED --> MP_IDLE : reset
+    MP_ERROR --> MP_IDLE : reset
 ```
 
 ### 3.3 状态转换表
@@ -304,42 +283,33 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        MotionPlayerNode                              │
-│                                                                      │
-│  ┌──────────────────┐    ┌──────────────────┐                       │
-│  │  Motion Library  │    │  Action Loader   │                       │
-│  │  (动作库)         │    │  (动作加载器)     │                       │
-│  │                  │    │                  │                       │
-│  │  - 文件索引      │    │  - 文件解析      │                       │
-│  │  - 元数据缓存    │    │  - 格式校验      │                       │
-│  │  - 目录管理      │    │  - 内存加载      │                       │
-│  └────────┬─────────┘    └────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼───────────────────────▼─────────┐                       │
-│  │         Playback Controller              │                       │
-│  │   (播放控制：播放/暂停/停止/倍速/跳转)    │                       │
-│  └────────┬───────────────────────┬─────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼─────────┐   ┌─────────▼────────┐                       │
-│  │  Interpolator    │   │  Safety Guard    │                       │
-│  │  (插值器)         │   │  (安全卫士)       │                       │
-│  │                  │   │                  │                       │
-│  │ - 线性插值       │   │ - 关节限位检查   │                       │
-│  │ - 样条插值       │   │ - 速度限制       │                       │
-│  │ - 时间缩放       │   │ - SM状态校验     │                       │
-│  └────────┬─────────┘   └─────────┬────────┘                       │
-│           │                       │                                  │
-│  ┌────────▼───────────────────────▼─────────┐                       │
-│  │         MC Interface                       │                       │
-│  │   (将插值结果封装为 MotionTarget 下发 MC)  │                       │
-│  └───────────────────────────────────────────┘                       │
-│                                                                       │
-│  ┌─────────────────────────────────────────┐                        │
-│  │  ROS2 Action/Service/Topic Interface    │                        │
-│  └─────────────────────────────────────────┘                        │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph MPNode["MotionPlayerNode"]
+        Lib["Motion Library
+(动作库)
+· 文件索引 / 元数据缓存 / 目录管理"]
+        Loader["Action Loader
+(动作加载器)
+· 文件解析 / 格式校验 / 内存加载"]
+        Controller["Playback Controller
+(播放控制：播放/暂停/停止/倍速/跳转)"]
+        Interpolator["Interpolator
+(插值器)
+· 线性插值 / 样条插值 / 时间缩放"]
+        Guard["Safety Guard
+(安全卫士)
+· 关节限位检查 / 速度限制 / SM状态校验"]
+        MCIF["MC Interface
+(将插值结果封装为 MotionTarget 下发 MC)"]
+        ROS2IF["ROS2 Action/Service/Topic Interface"]
+
+        Lib --> Controller
+        Loader --> Controller
+        Controller --> Interpolator --> MCIF
+        Controller --> Guard --> MCIF
+        MCIF --> ROS2IF
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -425,35 +395,23 @@ TE 请求同时播放两个动作（上半身 + 下半身）
 
 #### 时序：动作播放与急停
 
-```
-TE              MP              SM           MC
-  │              │              │            │
-  │─PlayMotion──►│              │            │
-  │              │─is_motion────►│            │
-  │              │  _allowed    │            │
-  │              │◄─allowed─────│            │
-  │              │              │            │
-  │              │─load_motion──│            │
-  │              │              │            │
-  │              │              │            │
-  │◄─Feedback───│              │            │
-  │  progress    │              │            │
-  │              │              │            │
-  │              │─motion_target─────────────►│
-  │              │              │            │
-  │◄─Feedback───│              │            │
-  │              │              │            │
-  │              │              │            │
-  │              │              │─robot_state│
-  │              │              │(E_STOP)    │
-  │              │              │            │
-  │              │◄─────────────│            │
-  │              │              │            │
-  │              │─STOP─────────────────────►│
-  │              │              │            │
-  │◄─Cancelled──│              │            │
-  │              │              │            │
-```
+```mermaid
+sequenceDiagram
+    participant TE
+    participant MP
+    participant SM
+    participant MC
+    TE->>MP: PlayMotion
+    MP->>SM: is_motion_allowed
+    SM-->>MP: allowed
+    MP->>MP: load_motion
+    MP-->>TE: Feedback (progress)
+    MP->>MC: motion_target
+    MP-->>TE: Feedback (progress)
+    SM-->>MP: robot_state (E_STOP)
+    MP->>MC: STOP
+    MP-->>TE: Cancelled
+``````
 
 ---
 
@@ -526,52 +484,52 @@ uint16 ERR_FILE_CORRUPTED        = 7012   # 动作文件损坏
 
 ```
 mp_msgs/                # 消息定义包
-├── msg/
-│   ├── MotionPlayerState.msg
-│   ├── MotionFrame.msg
-│   ├── MotionCatalog.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── GetMotionCatalog.srv
-│   ├── GetMotionInfo.srv
-│   └── StopMotion.srv
-├── action/
-│   └── PlayMotion.action
-├── CMakeLists.txt
-└── package.xml
+- msg/
+    - MotionPlayerState.msg
+    - MotionFrame.msg
+    - MotionCatalog.msg
+    - Heartbeat.msg
+- srv/
+    - GetHealthStatus.srv
+    - GetMotionCatalog.srv
+    - GetMotionInfo.srv
+    - StopMotion.srv
+- action/
+    - PlayMotion.action
+- CMakeLists.txt
+- package.xml
 
 mp/                     # 节点实现包
-├── include/mp/
-│   ├── mp_node.hpp
-│   ├── motion_library.hpp
-│   ├── action_loader.hpp
-│   ├── playback_controller.hpp
-│   ├── interpolator.hpp
-│   └── safety_guard.hpp
-├── src/
-│   ├── mp_node.cpp
-│   ├── motion_library.cpp
-│   ├── action_loader.cpp
-│   ├── playback_controller.cpp
-│   ├── interpolator.cpp
-│   ├── safety_guard.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_interpolator.cpp
-│   ├── test_safety_guard.cpp
-│   ├── test_playback_controller.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── mp_params.yaml
-├── launch/
-│   └── mp.launch.py
-├── motions/                   # 预置动作文件（示例）
-│   ├── wave.motion
-│   ├── bow.motion
-│   └── stand_up.motion
-├── CMakeLists.txt
-└── package.xml
+- include/mp/
+    - mp_node.hpp
+    - motion_library.hpp
+    - action_loader.hpp
+    - playback_controller.hpp
+    - interpolator.hpp
+    - safety_guard.hpp
+- src/
+    - mp_node.cpp
+    - motion_library.cpp
+    - action_loader.cpp
+    - playback_controller.cpp
+    - interpolator.cpp
+    - safety_guard.cpp
+    - main.cpp
+- test/
+    - test_interpolator.cpp
+    - test_safety_guard.cpp
+    - test_playback_controller.cpp
+    - test_integration.cpp
+- config/
+    - mp_params.yaml
+- launch/
+    - mp.launch.py
+- motions/                   # 预置动作文件（示例）
+    - wave.motion
+    - bow.motion
+    - stand_up.motion
+- CMakeLists.txt
+- package.xml
 ```
 
 ---

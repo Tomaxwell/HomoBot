@@ -1,0 +1,26 @@
+data_quality_filter:
+  # Quality thresholds
+  thresholds:
+    min_sharpness: 100.0
+    min_density: 1000
+    max_noise: 0.05
+    min_completeness: 0.9
+    redundancy_threshold: 0.95
+
+  # Evaluator switches
+  evaluators:
+    image_quality: true
+    lidar_quality: true
+    imu_quality: true
+    vla_completeness: true
+    redundancy_detection: true
+
+  # Redundancy detection
+  redundancy:
+    keyframe_interval_max: 30
+    similarity_weight_image: 0.6
+    similarity_weight_pose: 0.4
+
+  # Performance
+  max_eval_latency_ms: 1.0
+  buffer_size: 100

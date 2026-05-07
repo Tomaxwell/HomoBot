@@ -1,0 +1,9 @@
+# Cloud deploy rules (supports hot update)
+
+string rules_yaml                 # Rules YAML string (Base64 encoded)
+bool replace_all                  # Whether to replace all rules (false = incremental)
+---
+bool success
+string message
+string[] deployed_rule_ids
+string[] failed_rule_ids

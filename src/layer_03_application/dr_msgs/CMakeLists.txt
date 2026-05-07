@@ -14,6 +14,8 @@ set(msg_files
   "msg/RecorderState.msg"
   "msg/RecordingSession.msg"
   "msg/VlaDataFrame.msg"
+  "msg/FailureContext.msg"
+  "msg/DataAssetMetadata.msg"
   "msg/Heartbeat.msg"
 )
 

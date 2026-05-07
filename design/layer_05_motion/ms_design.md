@@ -57,45 +57,22 @@
 
 ### 3.2 状态转换图
 
-```
-                              ┌───────────────────────────────────────────────┐
-                              │                                               │
-                        ┌─────┴──────┐   start_stream    ┌───────────────────┴───┐
-                  ┌──►  │   MS_IDLE  │──────────────────►│      MS_STREAMING     │
-                  │     │     0      │                   │         1             │
-                  │     └────────────┘                   └───────────┬───────────┘
-                  │           ▲                                      │
-                  │           │         stream_end / stop            │
-                  │           │    ┌─────────────────────────────────┘
-                  │           │    │ irregular_input
-                  │           │    ▼
-                  │           │  ┌──────────────────┐   recover    ┌───────────┐
-                  │           │  │    MS_BUFFERING  │─────────────►│ MS_STREAMING
-                  │           │  │        2         │              │     1     │
-                  │           │  └────────┬─────────┘              └───────────┘
-                  │           │           │
-                  │           │           │ limit_active
-                  │           │           ▼
-                  │           │  ┌──────────────────┐   resolve    ┌───────────┐
-                  │           │  │    MS_LIMITING   │─────────────►│ MS_STREAMING
-                  │           │  │        3         │              │     1     │
-                  │           │  └────────┬─────────┘              └───────────┘
-                  │           │           │
-                  │           │           │ source_lost
-                  │           │           ▼
-                  │           │  ┌──────────────────┐   recover    ┌───────────┐
-                  │           │  │   MS_DEGRADED    │─────────────►│ MS_STREAMING
-                  │           │  │        4         │              │     1     │
-                  │           │  └────────┬─────────┘              └───────────┘
-                  │           │           │
-                  │           │           │ persistent_fault
-                  │           │           ▼
-                  │           │  ┌──────────────────┐   reset      ┌───────────┐
-                  │           └──│     MS_FAULT     │─────────────►│  MS_IDLE  │
-                  │              │        5         │              │     0     │
-                  │              └──────────────────┘              └───────────┘
-                  │
-                  └────────────────────────────────────────────────────────────────►
+```mermaid
+stateDiagram-v2
+    [*] --> MS_IDLE
+    MS_IDLE --> MS_STREAMING : start_stream
+    MS_STREAMING --> MS_IDLE : stream_end / stop
+    MS_STREAMING --> MS_BUFFERING : irregular_input
+    MS_BUFFERING --> MS_STREAMING : recover
+    MS_STREAMING --> MS_LIMITING : limit_active
+    MS_LIMITING --> MS_STREAMING : resolve
+    MS_STREAMING --> MS_DEGRADED : source_lost
+    MS_DEGRADED --> MS_STREAMING : recover
+    MS_STREAMING --> MS_FAULT : persistent_fault
+    MS_BUFFERING --> MS_FAULT : persistent_fault
+    MS_LIMITING --> MS_FAULT : persistent_fault
+    MS_DEGRADED --> MS_FAULT : persistent_fault
+    MS_FAULT --> MS_IDLE : reset
 ```
 
 ### 3.3 状态转换表
@@ -276,50 +253,36 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       MotionStreamerNode                             │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │                    Input Buffer Manager                           │  │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────────┐   │  │
-│  │  │   TE Source   │  │  Agent Source │  │   PnC Source      │   │  │
-│  │  │   Buffer      │  │   Buffer      │  │   Buffer          │   │  │
-│  │  │  (环形队列)    │  │  (环形队列)    │  │  (环形队列)        │   │  │
-│  │  └───────┬───────┘  └───────┬───────┘  └─────────┬─────────┘   │  │
-│  │          │                  │                    │              │  │
-│  │          └──────────────────┼────────────────────┘              │  │
-│  │                             │                                   │  │
-│  │                    ┌────────▼────────┐                          │  │
-│  │                    │  Priority Queue  │                          │  │
-│  │                    │  (优先级排序)     │                          │  │
-│  │                    └────────┬────────┘                          │  │
-│  └─────────────────────────────┼───────────────────────────────────┘  │
-│                                │                                       │
-│  ┌─────────────────────────────▼───────────────────────────────────┐  │
-│  │                    Command Arbiter                                 │  │
-│  │   (冲突检测 → 优先级仲裁 → 混合策略 → 单条指令)                     │  │
-│  └─────────────────────────────┬───────────────────────────────────┘  │
-│                                │                                       │
-│  ┌─────────────────────────────▼───────────────────────────────────┐  │
-│  │                    Smoothing Filter                                │  │
-│  │   (低通滤波 → 最小加加速度轨迹 → 样条插值)                         │  │
-│  └─────────────────────────────┬───────────────────────────────────┘  │
-│                                │                                       │
-│  ┌─────────────────────────────▼───────────────────────────────────┐  │
-│  │                    Safety Limiter                                  │  │
-│  │   (速度限幅 → 加速度限幅 → 加加速度限幅 → 关节限位)                │  │
-│  └─────────────────────────────┬───────────────────────────────────┘  │
-│                                │                                       │
-│  ┌─────────────────────────────▼───────────────────────────────────┐  │
-│  │                    Output Scheduler                                │  │
-│  │   (固定 100Hz 定时器 → 封装 StreamMotionTarget → 发布到 /ms/motion_target)│  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                    ROS2 Service/Topic Interface                    │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph MSNode["MotionStreamerNode"]
+        subgraph BufMgr["Input Buffer Manager"]
+            TE_Buf["TE Source Buffer
+(环形队列)"]
+            Agent_Buf["Agent Source Buffer
+(环形队列)"]
+            PnC_Buf["PnC Source Buffer
+(环形队列)"]
+            PQueue["Priority Queue
+(优先级排序)"]
+            TE_Buf --> PQueue
+            Agent_Buf --> PQueue
+            PnC_Buf --> PQueue
+        end
+
+        Arbiter["Command Arbiter
+(冲突检测 → 优先级仲裁 → 混合策略 → 单条指令)"]
+        Smoother["Smoothing Filter
+(低通滤波 → 最小加加速度轨迹 → 样条插值)"]
+        Limiter["Safety Limiter
+(速度限幅 → 加速度限幅 → 加加速度限幅 → 关节限位)"]
+        Scheduler["Output Scheduler
+(固定 100Hz 定时器 → 封装 StreamMotionTarget
+→ 发布到 /ms/motion_target)"]
+        ROS2IF["ROS2 Service/Topic Interface"]
+
+        PQueue --> Arbiter --> Smoother --> Limiter --> Scheduler --> ROS2IF
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -410,21 +373,18 @@ TE 发送手臂运动指令（控制关节 1-10）
 
 #### 时序：指令流处理
 
-```
-TE            MS              MC
-  │             │              │
-  │─cmd@t1─────►│              │
-  │             │              │
-  │             │─整形+限速────│
-  │             │              │
-  │─cmd@t2─────►│              │
-  │             │              │
-  │             │              │
-  │             │─target@10ms─►│
-  │             │─target@20ms─►│
-  │             │─target@30ms─►│
-  │             │ ...          │
-  │             │              │
+```mermaid
+sequenceDiagram
+    participant TE
+    participant MS
+    participant MC
+    TE->>MS: cmd@t1
+    MS->>MC: 整形+限速
+    TE->>MS: cmd@t2
+    MS->>MC: target@10ms
+    MS->>MC: target@20ms
+    MS->>MC: target@30ms
+    Note over MS,MC: ...
 ```
 
 ---
@@ -498,46 +458,46 @@ uint16 ERR_SOURCE_INVALID        = 8012   # 非法输入源
 
 ```
 ms_msgs/                # 消息定义包
-├── msg/
-│   ├── MotionStreamerState.msg
-│   ├── MotionCommand.msg
-│   ├── MotionTarget.msg
-│   ├── StreamStatistics.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── SetStreamParameters.srv
-│   └── StopStream.srv
-├── CMakeLists.txt
-└── package.xml
+- msg/
+    - MotionStreamerState.msg
+    - MotionCommand.msg
+    - MotionTarget.msg
+    - StreamStatistics.msg
+    - Heartbeat.msg
+- srv/
+    - GetHealthStatus.srv
+    - SetStreamParameters.srv
+    - StopStream.srv
+- CMakeLists.txt
+- package.xml
 
 ms/                     # 节点实现包
-├── include/ms/
-│   ├── ms_node.hpp
-│   ├── input_buffer_manager.hpp
-│   ├── command_arbiter.hpp
-│   ├── smoothing_filter.hpp
-│   ├── safety_limiter.hpp
-│   └── output_scheduler.hpp
-├── src/
-│   ├── ms_node.cpp
-│   ├── input_buffer_manager.cpp
-│   ├── command_arbiter.cpp
-│   ├── smoothing_filter.cpp
-│   ├── safety_limiter.cpp
-│   ├── output_scheduler.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_smoothing_filter.cpp
-│   ├── test_safety_limiter.cpp
-│   ├── test_command_arbiter.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── ms_params.yaml
-├── launch/
-│   └── ms.launch.py
-├── CMakeLists.txt
-└── package.xml
+- include/ms/
+    - ms_node.hpp
+    - input_buffer_manager.hpp
+    - command_arbiter.hpp
+    - smoothing_filter.hpp
+    - safety_limiter.hpp
+    - output_scheduler.hpp
+- src/
+    - ms_node.cpp
+    - input_buffer_manager.cpp
+    - command_arbiter.cpp
+    - smoothing_filter.cpp
+    - safety_limiter.cpp
+    - output_scheduler.cpp
+    - main.cpp
+- test/
+    - test_smoothing_filter.cpp
+    - test_safety_limiter.cpp
+    - test_command_arbiter.cpp
+    - test_integration.cpp
+- config/
+    - ms_params.yaml
+- launch/
+    - ms.launch.py
+- CMakeLists.txt
+- package.xml
 ```
 
 ---

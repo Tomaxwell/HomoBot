@@ -292,38 +292,38 @@ MapInfo map_info
 
 ### 5.1 节点架构
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         MapManagerNode                                    │
-│                                                                           │
-│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐   │
-│  │  Map Registry    │    │  Storage Manager │    │  Lifecycle       │   │
-│  │  (地图注册表)     │    │  (存储管理)       │    │  Controller      │   │
-│  │                  │    │                  │    │  (生命周期控制)   │   │
-│  │  - 地图元数据     │    │  - 文件读写      │    │  - 创建→保存     │   │
-│  │  - 索引查询      │    │  - 压缩/解压     │    │  - 加载→激活     │   │
-│  │  - 版本管理      │    │  - 配额管理      │    │  - 归档→删除     │   │
-│  └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘   │
-│           │                       │                       │             │
-│  ┌────────▼───────────────────────▼───────────────────────▼─────────┐   │
-│  │                         Map Fusion Engine                          │   │
-│  │   (视觉地图 + 点云地图 → 统一融合地图)                              │   │
-│  └────────┬───────────────────────────────────────────────────────┬───┘   │
-│           │                                                       │       │
-│  ┌────────▼─────────┐   ┌──────────────────┐   ┌────────────────▼───┐   │
-│  │  Cloud Sync      │   │  Quality         │   │  Active Map        │   │
-│  │  Agent           │   │  Monitor         │   │  Cache             │   │
-│  │  (云端同步)       │   │  (质量监控)       │   │  (激活地图缓存)     │   │
-│  │                  │   │                  │   │                    │   │
-│  │  - 上传地图      │   │  - 一致性检查    │   │  - 内存映射        │   │
-│  │  - 下载地图      │   │  - 完整性校验    │   │  - 快速查询        │   │
-│  │  - 差异同步      │   │  - 过期标记      │   │  - 热切换支持      │   │
-│  └──────────────────┘   └──────────────────┘   └────────────────────┘   │
-│                                                                           │
-│  ┌───────────────────────────────────────────────────────────────────┐   │
-│  │                        ROS2 Service/Topic Interface               │   │
-│  └───────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph MapManagerNode
+        Registry["Map Registry
+(地图注册表)
+· 地图元数据 / 索引查询 / 版本管理"]
+        Storage["Storage Manager
+(存储管理)
+· 文件读写 / 压缩解压 / 配额管理"]
+        Lifecycle["Lifecycle Controller
+(生命周期控制)
+· 创建→保存 / 加载→激活 / 归档→删除"]
+        Fusion["Map Fusion Engine
+(视觉地图 + 点云地图 → 统一融合地图)"]
+        CloudSync["Cloud Sync Agent
+(云端同步)
+· 上传地图 / 下载地图 / 差异同步"]
+        Quality["Quality Monitor
+(质量监控)
+· 一致性检查 / 完整性校验 / 过期标记"]
+        Cache["Active Map Cache
+(激活地图缓存)
+· 内存映射 / 快速查询 / 热切换支持"]
+        ROS2IF["ROS2 Service/Topic Interface"]
+
+        Registry --> Fusion
+        Storage --> Fusion
+        Lifecycle --> Fusion
+        Fusion --> CloudSync
+        Fusion --> Quality
+        Fusion --> Cache
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -405,22 +405,21 @@ Gateway 调用 /mapmanager/sync_map_with_cloud
 
 #### 时序：任务切换时地图加载
 
-```
-TE           MapManager        VSLAM        Lidar-SLAM      PnC
- │              │               │              │             │
- │─load_map────►│               │              │             │
- │              │               │              │             │
- │              │─load_map─────►│              │             │
- │              │─load_map────────────────────►│             │
- │              │               │              │             │
- │              │◄─loaded──────│              │             │
- │              │◄─loaded─────────────────────│             │
- │              │               │              │             │
- │              │─state(ACTIVE)───────────────►│             │
- │              │─state(ACTIVE)─────────────────────────────►│
- │              │               │              │             │
- │◄─success────│               │              │             │
- │              │               │              │             │
+```mermaid
+sequenceDiagram
+    participant TE
+    participant MapManager
+    participant VSLAM
+    participant LidarSLAM as Lidar-SLAM
+    participant PnC
+    TE->>MapManager: load_map
+    MapManager->>VSLAM: load_map
+    MapManager->>LidarSLAM: load_map
+    VSLAM-->>MapManager: loaded
+    LidarSLAM-->>MapManager: loaded
+    MapManager->>VSLAM: state(ACTIVE)
+    MapManager->>PnC: state(ACTIVE)
+    MapManager-->>TE: success
 ```
 
 ---
@@ -488,55 +487,55 @@ uint16 ERR_VERSION_CONFLICT      = 12010   # 版本冲突
 
 ```
 mapmanager_msgs/        # 消息定义包
-├── msg/
-│   ├── MapManagerState.msg
-│   ├── MapInfo.msg
-│   ├── MapList.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── SubmitMap.srv
-│   ├── LoadMap.srv
-│   ├── SaveMap.srv
-│   ├── RemoveMap.srv
-│   ├── GetMapList.srv
-│   ├── GetMapInfo.srv
-│   ├── SyncMapWithCloud.srv
-│   └── GetActiveMap.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        MapManagerState.msg
+        MapInfo.msg
+        MapList.msg
+        Heartbeat.msg
+    srv/
+        GetHealthStatus.srv
+        SubmitMap.srv
+        LoadMap.srv
+        SaveMap.srv
+        RemoveMap.srv
+        GetMapList.srv
+        GetMapInfo.srv
+        SyncMapWithCloud.srv
+        GetActiveMap.srv
+    CMakeLists.txt
+    package.xml
 
 mapmanager/             # 节点实现包
-├── include/mapmanager/
-│   ├── mapmanager_node.hpp
-│   ├── map_registry.hpp
-│   ├── storage_manager.hpp
-│   ├── lifecycle_controller.hpp
-│   ├── map_fusion_engine.hpp
-│   ├── cloud_sync_agent.hpp
-│   ├── quality_monitor.hpp
-│   └── active_map_cache.hpp
-├── src/
-│   ├── mapmanager_node.cpp
-│   ├── map_registry.cpp
-│   ├── storage_manager.cpp
-│   ├── lifecycle_controller.cpp
-│   ├── map_fusion_engine.cpp
-│   ├── cloud_sync_agent.cpp
-│   ├── quality_monitor.cpp
-│   ├── active_map_cache.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_map_registry.cpp
-│   ├── test_storage_manager.cpp
-│   ├── test_lifecycle.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── mapmanager_params.yaml
-├── launch/
-│   └── mapmanager.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/mapmanager/
+        mapmanager_node.hpp
+        map_registry.hpp
+        storage_manager.hpp
+        lifecycle_controller.hpp
+        map_fusion_engine.hpp
+        cloud_sync_agent.hpp
+        quality_monitor.hpp
+        active_map_cache.hpp
+    src/
+        mapmanager_node.cpp
+        map_registry.cpp
+        storage_manager.cpp
+        lifecycle_controller.cpp
+        map_fusion_engine.cpp
+        cloud_sync_agent.cpp
+        quality_monitor.cpp
+        active_map_cache.cpp
+        main.cpp
+    test/
+        test_map_registry.cpp
+        test_storage_manager.cpp
+        test_lifecycle.cpp
+        test_integration.cpp
+    config/
+        mapmanager_params.yaml
+    launch/
+        mapmanager.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ---

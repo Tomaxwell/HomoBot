@@ -16,6 +16,9 @@ uint16 ERR_TASK_NOT_FOUND               = 4014   # 指定任务不存在
 uint16 ERR_TASK_NOT_CANCELLABLE         = 4015   # 任务当前状态不可取消
 uint16 ERR_CONCURRENT_TASK_LIMIT        = 4016   # 并发任务数达到上限
 uint16 ERR_INTERNAL_ERROR               = 4017   # TE 内部错误
+uint16 ERR_TASK_DATA_TAG_FAIL           = 4018   # 任务数据标签生成失败
+uint16 ERR_AGENT_CONFIDENCE_MISSING     = 4019   # Agent 决策置信度数据缺失
+uint16 ERR_DR_RECORD_FAIL               = 4020   # DR 录制任务数据失败
 
 uint16 error_code
 string message

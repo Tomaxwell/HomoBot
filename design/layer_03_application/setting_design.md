@@ -57,20 +57,15 @@ Setting本身不维护复杂状态机，但参数有生命周期状态：
 
 ### 3.2 参数生命周期
 
-```
-┌─────────────┐   首次写入    ┌─────────────┐   云端确认    ┌─────────────┐
-│   DEFAULT   │─────────────►│  OVERRIDDEN │─────────────►│   SYNCED    │
-└─────────────┘              └──────┬──────┘              └─────────────┘
-     ▲                              │
-     │     恢复出厂                 │  云端推送不同值
-     └──────────────────────────────┘
-                                    │
-                                    ▼
-                              ┌─────────────┐
-                              │   CONFLICT  │◄────人工选择保留版本──┐
-                              └─────────────┘                      │
-                                    │                              │
-                                    └──────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> DEFAULT
+    DEFAULT --> OVERRIDDEN : 首次写入
+    OVERRIDDEN --> SYNCED : 云端确认
+    OVERRIDDEN --> DEFAULT : 恢复出厂
+    SYNCED --> OVERRIDDEN : 云端推送不同值
+    OVERRIDDEN --> CONFLICT : 云端推送不同值
+    CONFLICT --> OVERRIDDEN : 人工选择保留版本
 ```
 
 ---
@@ -286,47 +281,38 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        SettingNode                                    │
-│                                                                       │
-│  ┌──────────────────┐    ┌──────────────────┐                        │
-│  │  Parameter Store │    │  Schema Registry │                        │
-│  │  (参数仓库)       │    │  (Schema注册表)   │                        │
-│  │                  │    │                  │                        │
-│  │  - key-value存储  │    │  - 参数定义加载   │                        │
-│  │  - 命名空间隔离   │    │  - 写入前校验    │                        │
-│  │  - 内存缓存      │    │  - 默认值管理    │                        │
-│  │  - 变更历史      │    │  - 范围/枚举检查 │                        │
-│  └────────┬─────────┘    └────────┬─────────┘                        │
-│           │                       │                                   │
-│  ┌────────▼───────────────────────▼─────────┐                        │
-│  │         Validation Engine                 │                        │
-│  │   (类型检查 → 范围检查 → 枚举检查 → 依赖检查)│                       │
-│  └────────┬───────────────────────┬─────────┘                        │
-│           │                       │                                   │
-│  ┌────────▼─────────┐   ┌─────────▼────────┐                        │
-│  │  Persistence     │   │  Change Notifier │                        │
-│  │  Manager         │   │  (变更通知器)     │                        │
-│  │  (持久化管理)     │   │                  │                        │
-│  │  - 原子写入YAML  │   │  - Topic广播     │                        │
-│  │  - 启动加载      │   │  - 回调通知      │                        │
-│  │  - 备份恢复      │   │  - 差异检测      │                        │
-│  └────────┬─────────┘   └──────────────────┘                        │
-│           │                                                           │
-│  ┌────────▼─────────┐   ┌──────────────────┐                        │
-│  │  Cloud Sync      │   │  Audit Logger    │                        │
-│  │  Agent           │   │  (审计日志)       │                        │
-│  │  (云同步代理)     │   │                  │                        │
-│  │  - 拉取云端配置  │   │  - 变更记录      │                        │
-│  │  - 推送本地变更  │   │  - 查询接口      │                        │
-│  │  - 冲突检测      │   │  - 历史回溯      │                        │
-│  └──────────────────┘   └──────────────────┘                        │
-│                                                                       │
-│  ┌─────────────────────────────────────────┐                        │
-│  │  ROS2 Service/Topic Interface           │                        │
-│  └─────────────────────────────────────────┘                        │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph SettingNode
+        Store["Parameter Store
+(参数仓库)
+· key-value存储 / 命名空间隔离 / 内存缓存 / 变更历史"]
+        Schema["Schema Registry
+(Schema注册表)
+· 参数定义加载 / 写入前校验 / 默认值管理 / 范围枚举检查"]
+        Validator["Validation Engine
+(类型检查 → 范围检查 → 枚举检查 → 依赖检查)"]
+        Persistence["Persistence Manager
+(持久化管理)
+· 原子写入YAML / 启动加载 / 备份恢复"]
+        Notifier["Change Notifier
+(变更通知器)
+· Topic广播 / 回调通知 / 差异检测"]
+        CloudSync["Cloud Sync Agent
+(云同步代理)
+· 拉取云端配置 / 推送本地变更 / 冲突检测"]
+        Audit["Audit Logger
+(审计日志)
+· 变更记录 / 查询接口 / 历史回溯"]
+        ROS2IF["ROS2 Service/Topic Interface"]
+
+        Store --> Validator
+        Schema --> Validator
+        Validator --> Persistence
+        Validator --> Notifier
+        Persistence --> CloudSync
+        Persistence --> Audit
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -422,39 +408,41 @@ SettingNode 启动
 
 #### 时序1：模块启动时读取配置
 
-```
-MC启动              Setting              磁盘
-  │                   │                   │
-  │──get_parameter───►│                   │
-  │  "mc.control_freq"│                   │
-  │                   │──内存命中────────►│
-  │                   │◄──返回值──────────│
-  │                   │                   │
-  │◄──ParameterValue──│                   │
-  │                   │                   │
-  │──get_parameter───►│                   │
-  │  "mc.joint_limit" │                   │
-  │                   │──内存命中────────►│
-  │                   │◄──返回值──────────│
-  │◄──ParameterValue──│                   │
+```mermaid
+sequenceDiagram
+    participant MC
+    participant Setting
+    participant Disk as 磁盘
+
+    MC->>Setting: get_parameter("mc.control_freq")
+    Setting->>Disk: 内存命中
+    Disk-->>Setting: 返回值
+    Setting-->>MC: ParameterValue
+
+    MC->>Setting: get_parameter("mc.joint_limit")
+    Setting->>Disk: 内存命中
+    Disk-->>Setting: 返回值
+    Setting-->>MC: ParameterValue
 ```
 
 #### 时序2：用户修改配置并热生效
 
-```
-APP用户        Gateway         Setting        MC
-  │              │               │             │
-  │──改配置─────►│               │             │
-  │              │──set_param───►│             │
-  │              │               │             │
-  │              │               │──验证通过───│
-  │              │               │             │
-  │              │◄──success────│             │
-  │◄──确认───────│               │             │
-  │              │               │             │
-  │              │               │──change_event──►│
-  │              │               │               │
-  │              │               │               │──应用新配置──►
+```mermaid
+sequenceDiagram
+    participant User as APP用户
+    participant Gateway
+    participant Setting
+    participant MC
+
+    User->>Gateway: 改配置
+    Gateway->>Setting: set_param
+    Setting->>MC: 验证通过
+    MC-->>Setting: success
+    Setting-->>Gateway: success
+    Gateway-->>User: 确认
+
+    Setting->>MC: change_event
+    MC->>MC: 应用新配置
 ```
 
 ---
@@ -560,55 +548,55 @@ uint16 ERR_SCHEMA_NOT_FOUND        = 15010   # Schema定义缺失
 
 ```
 setting_msgs/           # 消息定义包
-├── msg/
-│   ├── ParameterValue.msg
-│   ├── ParameterSchema.msg
-│   ├── ParameterChangeEvent.msg
-│   ├── Heartbeat.msg
-│   └── ParameterNamespace.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── GetParameter.srv
-│   ├── SetParameter.srv
-│   ├── GetParameterList.srv
-│   ├── SetParametersBatch.srv
-│   ├── ResetToDefault.srv
-│   └── ValidateParameter.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        ParameterValue.msg
+        ParameterSchema.msg
+        ParameterChangeEvent.msg
+        Heartbeat.msg
+        ParameterNamespace.msg
+    srv/
+        GetHealthStatus.srv
+        GetParameter.srv
+        SetParameter.srv
+        GetParameterList.srv
+        SetParametersBatch.srv
+        ResetToDefault.srv
+        ValidateParameter.srv
+    CMakeLists.txt
+    package.xml
 
 setting/                # 节点实现包
-├── include/setting/
-│   ├── setting_node.hpp
-│   ├── parameter_store.hpp
-│   ├── schema_registry.hpp
-│   ├── validation_engine.hpp
-│   ├── persistence_manager.hpp
-│   ├── change_notifier.hpp
-│   ├── cloud_sync_agent.hpp
-│   └── audit_logger.hpp
-├── src/
-│   ├── setting_node.cpp
-│   ├── parameter_store.cpp
-│   ├── schema_registry.cpp
-│   ├── validation_engine.cpp
-│   ├── persistence_manager.cpp
-│   ├── change_notifier.cpp
-│   ├── cloud_sync_agent.cpp
-│   ├── audit_logger.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_validation_engine.cpp
-│   ├── test_parameter_store.cpp
-│   ├── test_persistence.cpp
-│   └── test_integration.cpp
-├── config/
-│   ├── setting_params.yaml
-│   └── default_schemas.yaml
-├── launch/
-│   └── setting.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/setting/
+        setting_node.hpp
+        parameter_store.hpp
+        schema_registry.hpp
+        validation_engine.hpp
+        persistence_manager.hpp
+        change_notifier.hpp
+        cloud_sync_agent.hpp
+        audit_logger.hpp
+    src/
+        setting_node.cpp
+        parameter_store.cpp
+        schema_registry.cpp
+        validation_engine.cpp
+        persistence_manager.cpp
+        change_notifier.cpp
+        cloud_sync_agent.cpp
+        audit_logger.cpp
+        main.cpp
+    test/
+        test_validation_engine.cpp
+        test_parameter_store.cpp
+        test_persistence.cpp
+        test_integration.cpp
+    config/
+        setting_params.yaml
+        default_schemas.yaml
+    launch/
+        setting.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ---

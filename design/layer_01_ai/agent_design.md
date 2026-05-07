@@ -77,11 +77,20 @@ Agent 参考开源项目 [RoboClaw](https://github.com/MINT-SJTU/RoboClaw) 的 A
 │  │  (技能注册表)   │   │  (记忆管理)     │   │  (上下文构建)   │   │
 │  │                 │   │                 │   │                 │   │
 │  │ - perceive      │   │ - 短期对话记忆  │   │ - 系统提示词    │   │
-│  │ - query_state   │   │ - 长期任务记忆  │   │ - 历史消息      │   │
+│  │ - query_state   │   │ - 长期任务记忆  │   │ - 自动归档      │   │
 │  │ - dispatch_task │   │ - 自动归档      │   │ - 工具定义      │   │
 │  │ - cancel_task   │   │                 │   │ - 环境快照      │   │
 │  │ - ask_user      │   │                 │   │                 │   │
 │  └─────────────────┘   └─────────────────┘   └─────────────────┘   │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │              Confidence Monitor (决策置信度监控)                 │   │
+│  │                                                                 │   │
+│  │  - 监控 LLM 推理置信度（token 概率、一致性检查）                 │   │
+│  │  - 低置信度时标记数据质量标签（供 DR / DataQualityFilter）       │   │
+│  │  - 生成决策质量报告，嵌入 TaskProposal 元数据                    │   │
+│  │                                                                 │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                   ROS2 Interface Layer                          │   │
@@ -168,6 +177,32 @@ Current Message（用户当前指令）
 - 当前位置（SLAM 定位）
 - 最近感知结果摘要（障碍物、人物、物品）
 - 正在执行的任务状态
+
+#### 3.2.4 Confidence Monitor（决策置信度监控器）
+
+Confidence Monitor 负责评估 Agent 每次推理决策的置信度，为数据平台提供质量标签。
+
+**功能**：
+
+| 功能 | 说明 |
+|------|------|
+| Token 概率监控 | 提取 LLM 输出中关键决策 token 的对数概率，计算平均置信度 |
+| 一致性检查 | 对同一指令执行多次采样，检查输出一致性（CoT 自洽性） |
+| 低置信度标记 | 置信度低于阈值时，在 TaskProposal 中附加 `confidence_tag: LOW` |
+| 数据质量标签生成 | 向 `/agent/decision_quality` Topic 发布 DecisionQuality 消息 |
+
+**阈值配置**：
+
+```yaml
+confidence_monitor:
+  low_confidence_threshold: 0.6      # 平均 token 概率阈值
+  consistency_check_samples: 3       # 一致性检查采样次数
+  enable_consistency_check: false    # 是否启用（消耗额外算力）
+```
+
+**输出**：
+- `DecisionQuality.msg`：包含 task_id、confidence_score、quality_tag（HIGH/MEDIUM/LOW）、reason
+- DataQualityFilter 订阅此 Topic，将质量标签关联到 VLA 训练数据帧
 
 ---
 
@@ -474,6 +509,7 @@ SM 状态变为 ACTIVE_E_STOP 或 FAULT
 | HDS | Agent → HDS | `/hds/health_report` (Topic) | 上报异常 |
 | HDS | Agent → HDS | `/agent/heartbeat` (Topic) | 心跳 |
 | DR | Agent → DR | `/agent/agent_state` (Topic) | Agent 决策记录 |
+| DataQualityFilter | Agent → DataQualityFilter | `/agent/decision_quality` (Topic) | 决策质量标签（VLA数据质量） |
 | MC | MC → Agent | `/mc/mc_state` (Topic) | 运动模式状态（可选订阅）|
 | PnC | PnC → Agent | `/pnc/pnc_state` (Topic) | 导航状态（可选订阅）|
 
@@ -551,6 +587,9 @@ agent:
 | 5007 | `ERR_MAX_ITERATIONS` | 达到最大迭代次数（任务未完成）| MEDIUM |
 | 5008 | `ERR_CONTEXT_OVERFLOW` | 上下文超出 token 限制，无法继续推理 | MEDIUM |
 | 5009 | `ERR_MEMORY_FAIL` | 记忆读写失败（存储故障）| LOW |
+| 5010 | `ERR_LOW_CONFIDENCE` | LLM 推理置信度低于阈值 | LOW |
+| 5011 | `ERR_CONSISTENCY_CHECK_FAIL` | CoT 一致性检查失败（输出自相矛盾）| MEDIUM |
+| 5012 | `ERR_DECISION_QUALITY_TAG_FAIL` | 决策质量标签生成失败 | LOW |
 
 ---
 
@@ -589,7 +628,8 @@ agent_msgs/
 │   ├── TaskProposal.msg          # 任务提案
 │   ├── AgentState.msg            # Agent 状态
 │   ├── Heartbeat.msg             # 心跳
-│   └── ErrorCode.msg             # 错误码（标准命名）
+│   ├── ErrorCode.msg             # 错误码（标准命名）
+│   └── DecisionQuality.msg       # 决策质量报告（数据质量标签）
 ├── srv/
 │   ├── QueryStatus.srv           # 查询状态
 │   ├── ClearMemory.srv           # 清除记忆
@@ -609,7 +649,8 @@ agent/
 │   ├── context_builder.hpp       # 上下文构建器
 │   ├── llm_provider.hpp          # LLM 提供者（本地/云端）
 │   ├── tool_executor.hpp         # 工具执行器
-│   └── message_router.hpp        # 消息路由器
+│   ├── message_router.hpp        # 消息路由器
+│   └── confidence_monitor.hpp    # 决策置信度监控器
 ├── src/
 │   ├── agent_node.cpp
 │   ├── agent_loop.cpp

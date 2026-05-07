@@ -530,6 +530,16 @@ uint32 total_subtask_count         # 总子任务数
 │  └─────────────────┘   └─────────────────┘   └─────────────────┘   │
 │                                                                      │
 │  ┌─────────────────────────────────────────┐                         │
+│  │  Task Data Tagger                       │                         │
+│  │  (任务数据标签器，供 DR 数据录制)       │                         │
+│  │                                         │                         │
+│  │  - 为每个任务附加语义标签（任务类型、    │                         │
+│  │    执行结果、环境上下文、Agent决策质量） │                         │
+│  │  - 生成 TaskDataTag 消息，发布到 DR     │                         │
+│  │  - 支持 VLA 训练数据的任务级元数据      │                         │
+│  └─────────────────────────────────────────┘                         │
+│                                                                      │
+│  ┌─────────────────────────────────────────┐                         │
 │  │  Composite Task Parser                  │                         │
 │  │  (JSON/YAML 复合任务描述解析器)         │                         │
 │  └─────────────────────────────────────────┘                         │
@@ -570,6 +580,39 @@ uint32 total_subtask_count         # 总子任务数
   2. 发布 `/te/task_state`（状态 = `CANCELLING` → `CANCELLED`）
   3. 请求 SM 状态转换（如需要）
   4. 拒绝所有新任务请求（返回 `ERR_ESTOP_ACTIVE` 或 `ERR_FAULT_STATE`）
+
+#### 5.2.5 Task Data Tagger（任务数据标签器）
+
+Task Data Tagger 负责为每个执行中的任务生成语义标签，供 DR 录制 VLA 训练数据时使用。
+
+**功能**：
+
+| 功能 | 说明 |
+|------|------|
+| 任务标签生成 | 任务开始时生成初始标签（task_type, requester, 时间戳, 环境上下文） |
+| 执行结果标签 | 任务结束时附加结果标签（success/failure, error_code, 执行时长） |
+| Agent 质量标签透传 | 接收 Agent 的 DecisionQuality，关联到任务标签 |
+| 数据帧关联 | 向 DR 发布 TaskDataTag，包含时间范围（start_time ~ end_time），DR 据此关联 MultimodalSyncFrame |
+
+**输出 Topic**：
+- `/te/task_data_tag` → DR（`TaskDataTag.msg`）
+
+**TaskDataTag 消息结构**：
+
+```
+string task_id
+string parent_task_id
+uint8 task_type
+builtin_interfaces/Time start_time
+builtin_interfaces/Time end_time
+uint8 result_status          # 0=UNKNOWN, 1=SUCCESS, 2=FAILED, 3=CANCELLED
+uint16 error_code            # 失败时的错误码
+string error_message
+string requester_node
+float32 agent_confidence     # Agent 决策置信度（-1 表示无 Agent 参与）
+string[] skill_calls         # 执行的技能调用列表
+string environment_context   # 环境上下文摘要（JSON）
+```
 
 ### 5.3 关键流程
 
@@ -703,6 +746,8 @@ Gateway/Agent 调用 /te/execute_composite (Action)
 | HDS | HDS → TE | `/te/control_scheduler` (Service) | HDS 触发降级时暂停调度器 |
 | EM | TE → EM | `/em/get_process_status` (Service) | 查询目标模块进程状态 |
 | DR | TE → DR | `/te/task_state` (Topic) | DR 记录任务执行历史 |
+| DR | TE → DR | `/te/task_data_tag` (Topic) | 任务语义标签（VLA训练数据关联） |
+| DataQualityFilter | TE → DataQualityFilter | `/te/task_data_tag` (Topic) | 数据质量评估任务级上下文 |
 | DR | DR → TE | `/te/get_task_status` (Service) | DR 回放时查询历史任务 |
 
 ### 6.2 关键交互时序
@@ -859,6 +904,9 @@ task_engine:
 | 4015 | `ERR_TASK_NOT_CANCELLABLE` | 任务当前状态不可取消 | 任务已完成或已失败 |
 | 4016 | `ERR_CONCURRENT_TASK_LIMIT` | 并发任务数达到上限 | 等待当前任务完成或增加并发限制 |
 | 4017 | `ERR_INTERNAL_ERROR` | TE 内部错误 | 检查 TE 日志，上报 HDS |
+| 4018 | `ERR_TASK_DATA_TAG_FAIL` | 任务数据标签生成失败 | 检查 DR 连接状态，不影响任务执行 |
+| 4019 | `ERR_AGENT_CONFIDENCE_MISSING` | Agent 决策置信度数据缺失 | 非 Agent 发起任务时正常，无需处理 |
+| 4020 | `ERR_DR_RECORD_FAIL` | DR 录制任务数据失败 | 检查 DR 模块状态，磁盘空间 |
 
 ---
 
@@ -872,7 +920,8 @@ te_msgs/                      # 消息定义包（纯接口）
 │   ├── SubTask.msg             # 子任务定义
 │   ├── TeSchedulerState.msg    # 调度器状态
 │   ├── Heartbeat.msg           # TE 心跳（标准命名）
-│   └── ErrorCode.msg           # 错误码定义（标准命名）
+│   ├── ErrorCode.msg           # 错误码定义（标准命名）
+│   └── TaskDataTag.msg         # 任务数据标签（VLA训练数据关联）
 ├── srv/
 │   ├── SubmitTask.srv          # 创建任务
 │   ├── CancelTask.srv          # 取消任务
@@ -895,7 +944,8 @@ te/                           # 节点实现包
 │   ├── task_lifecycle_manager.hpp # 生命周期管理器
 │   ├── composite_task_parser.hpp  # 复合任务解析器
 │   ├── estop_handler.hpp         # 急停处理器
-│   └── action_client_pool.hpp    # Action Client 池
+│   ├── action_client_pool.hpp    # Action Client 池
+│   └── task_data_tagger.hpp      # 任务数据标签器
 ├── src/
 │   ├── task_engine_node.cpp
 │   ├── task_scheduler.cpp

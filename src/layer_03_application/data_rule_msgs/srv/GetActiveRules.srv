@@ -1,0 +1,5 @@
+# Query current active rules
+
+---
+bool success
+data_rule_msgs/RuleDefinition[] rules

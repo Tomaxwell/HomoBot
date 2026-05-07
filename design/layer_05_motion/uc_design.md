@@ -70,41 +70,27 @@ UC 维护独立的上肢操作状态机，与 MC 的运动模式解耦。MC 运�
 
 ### 3.2 状态转换图
 
-```
-                              ┌───────────────────────────────────────────────┐
-                              │                                               │
-                        ┌─────┴──────┐   ee_target     ┌───────────────────┴───┐
-                  ┌──►  │   UC_IDLE  │──────────────────►│     UC_TRACKING       │
-                  │     │     0      │                   │         1             │
-                  │     └────────────┘                   └───────────┬───────────┘
-                  │           ▲                                      │
-                  │           │         tracking_complete            │
-                  │           │    ┌─────────────────────────────────┘
-                  │           │    │ force_mode_cmd
-                  │           │    ▼
-                  │           │  ┌──────────────────┐   tracking   ┌───────────┐
-                  │           │  │ UC_FORCE_CONTROL │◄────────────│UC_TRACKING│
-                  │           │  │        2         │              │     1     │
-                  │           │  └────────┬─────────┘              └───────────┘
-                  │           │           │ position_mode_cmd
-                  │           │           ▼
-                  │           │  ┌──────────────────┐   fault    ┌───────────┐
-                  │           │  │   UC_FAULT       │◄───────────│  ALL      │
-                  │           │  │       4          │            │  STATES   │
-                  │           │  └────────┬─────────┘            └───────────┘
-                  │           │           │ reset
-                  │           │           ▼
-                  │           │  ┌──────────────────┐  gripper_cmd  ┌───────────┐
-                  │           │  │ UC_GRIPPER_ACTION│◄──────────────│ UC_TRACKING│
-                  │           │  │       3          │               │     1     │
-                  │           │  └────────┬─────────┘               └───────────┘
-                  │           │           │ gripper_complete
-                  │           └───────────┘
-                  │
-                  └──────────────────────────────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> UC_IDLE
+    UC_IDLE --> UC_TRACKING : ee_target
+    UC_TRACKING --> UC_IDLE : tracking_complete
 
-    MC: MOTION_MODE_IDLE ──► UC_IDLE（强制）
-    MC: E-Stop ──► UC_IDLE（强制）
+    UC_TRACKING --> UC_FORCE_CONTROL : force_mode_cmd
+    UC_FORCE_CONTROL --> UC_TRACKING : position_mode_cmd
+
+    UC_TRACKING --> UC_GRIPPER_ACTION : gripper_cmd
+    UC_GRIPPER_ACTION --> UC_TRACKING : gripper_complete
+
+    UC_TRACKING --> UC_FAULT : fault
+    UC_FORCE_CONTROL --> UC_FAULT : fault
+    UC_GRIPPER_ACTION --> UC_FAULT : fault
+    UC_FAULT --> UC_IDLE : reset
+
+    note right of UC_IDLE
+        MC: MOTION_MODE_IDLE → UC_IDLE
+        MC: E-Stop → UC_IDLE
+    end note
 ```
 
 ### 3.3 状态说明
@@ -242,65 +228,32 @@ public:
 
 ### 5.1 节点/插件架构
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     UC Plugin (uc_common.so)                            │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   UC Control Pipeline (1kHz)                     │   │
-│  │                                                                  │   │
-│  │  Input: BaseState + LowerBodyStatus + EndEffectorCommand         │   │
-│  │        + JointState (from MC)                                    │   │
-│  │                                                                  │   │
-│  │   ┌─────────────────┐                                           │   │
-│  │   │ Base Disturbance │                                           │   │
-│  │   │ Compensation     │◄── LowerBodyStatus                        │   │
-│  │   │                  │    (gait_phase / lift_column_height)      │   │
-│  │   └────────┬────────┘                                           │   │
-│  │            │ compensated_target                                 │   │
-│  │            ▼                                                    │   │
-│  │   ┌─────────────────┐    ┌─────────────────┐                   │   │
-│  │   │ Self-Collision   │───►│ IK Solver        │                   │   │
-│  │   │ Avoidance        │    │                  │                   │   │
-│  │   │                  │    │ · 数值 IK (KDL/  │                   │   │
-│  │   │ · FCL 距离检测   │    │   TRAC-IK)       │                   │   │
-│  │   │ · 关节极限约束   │    │ · 冗余度优化     │                   │   │
-│  │   │ · 避碰速度调整   │    │ · 奇异点处理     │                   │   │
-│  │   └─────────────────┘    └────────┬────────┘                   │   │
-│  │                                    │ target_joints              │   │
-│  │                                    ▼                            │   │
-│  │   ┌──────────────────────────────────────────────────────────┐  │   │
-│  │   │              Trajectory Planner                           │  │   │
-│  │   │                                                           │  │   │
-│  │   │  模式分支：                                                │  │   │
-│  │   │  UC_TRACKING:    最小加加速度轨迹 (jerk-limited)           │  │   │
-│  │   │  UC_FORCE_CTRL:  导纳控制器 + 位置环                       │  │   │
-│  │   │                                                           │  │   │
-│  │   │  输出: joint_positions, joint_velocities, joint_efforts    │  │   │
-│  │   └──────────────────────────────────────────────────────────┘  │   │
-│  │                                    │                            │   │
-│  │                                    ▼                            │   │
-│  │   ┌─────────────────┐    ┌─────────────────┐                   │   │
-│  │   │ Gripper Ctrl    │◄───│ 状态机控制器     │                   │   │
-│  │   │                 │    │                 │                   │   │
-│  │   │ · 位置控制      │    │ · 状态转换逻辑   │                   │   │
-│  │   │ · 力限制        │    │ · 错误处理       │                   │   │
-│  │   └────────┬────────┘    └─────────────────┘                   │   │
-│  │            │                                                    │   │
-│  │            ▼                                                    │   │
-│  │   ┌──────────────────────────────────────────────────────────┐  │   │
-│  │   │ Output: JointCommand (上肢关节) + UpperBodyStatus         │  │   │
-│  │   └──────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   ROS2 Callback Thread (MC 代理)                 │   │
-│  │                                                                  │   │
-│  │  · 订阅 /uc/end_effector_target → 缓存到无锁队列                 │   │
-│  │  · 订阅 /uc/gripper_command → 缓存到无锁队列                     │   │
-│  │  · 发布 /uc/upper_body_status ← 从无锁队列读取                   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph UC["UC Plugin (uc_common.so)"]
+        subgraph CP["UC Control Pipeline (1kHz)"]
+            BDC["Base Disturbance Compensation"]
+            SCA["Self-Collision Avoidance"]
+            IK["IK Solver"]
+            TP["Trajectory Planner"]
+            GC["Gripper Ctrl"]
+            SMC["状态机控制器"]
+        end
+
+        ROS2T["ROS2 Callback Thread (MC 代理)"]
+    end
+
+    MC["MC"] --> BDC
+    MC --> IK
+    BDC --> SCA
+    SCA --> IK
+    IK --> TP
+    TP --> GC
+    TP --> SMC
+    SMC --> GC
+    GC --> HAL["HAL_EtherCAT"]
+
+    ROS2T --> CP
 ```
 
 ### 5.2 关键组件设计
@@ -688,37 +641,37 @@ upper_body_control:
 
 ```
 uc_common/
-├── include/uc_common/
-│   ├── uc_plugin.hpp                 # UpperBodyController 实现类
-│   ├── ik_solver.hpp                 # IK 求解器封装
-│   ├── trajectory_planner.hpp        # 轨迹规划器
-│   ├── force_controller.hpp          # 导纳/阻抗控制器
-│   ├── gripper_controller.hpp        # 夹爪控制器
-│   ├── self_collision_checker.hpp    # 自碰检测器
-│   ├── base_compensator.hpp          # 基座扰动补偿器
-│   └── utils.hpp                     # 工具函数（位姿插值、坐标变换等）
-├── src/
-│   ├── uc_plugin.cpp
-│   ├── ik_solver.cpp
-│   ├── trajectory_planner.cpp
-│   ├── force_controller.cpp
-│   ├── gripper_controller.cpp
-│   ├── self_collision_checker.cpp
-│   ├── base_compensator.cpp
-│   └── utils.cpp
-├── config/
-│   └── uc_params.yaml                # UC 参数配置
-├── test/
-│   ├── test_ik_solver.cpp            # IK 求解器单元测试
-│   ├── test_trajectory_planner.cpp   # 轨迹规划器单元测试
-│   ├── test_force_controller.cpp     # 力控制器单元测试
-│   ├── test_self_collision.cpp       # 自碰检测单元测试
-│   ├── test_base_compensator.cpp     # 基座补偿单元测试
-│   └── test_integration.cpp          # 集成测试（含 mock MC）
-├── urdf/
-│   └── upper_body.urdf               # 上肢 URDF（用于运动学和碰撞检测）
-├── CMakeLists.txt
-└── package.xml
+- include/uc_common/
+        uc_plugin.hpp                 # UpperBodyController 实现类
+        ik_solver.hpp                 # IK 求解器封装
+        trajectory_planner.hpp        # 轨迹规划器
+        force_controller.hpp          # 导纳/阻抗控制器
+        gripper_controller.hpp        # 夹爪控制器
+        self_collision_checker.hpp    # 自碰检测器
+        base_compensator.hpp          # 基座扰动补偿器
+        utils.hpp                     # 工具函数（位姿插值、坐标变换等）
+- src/
+        uc_plugin.cpp
+        ik_solver.cpp
+        trajectory_planner.cpp
+        force_controller.cpp
+        gripper_controller.cpp
+        self_collision_checker.cpp
+        base_compensator.cpp
+        utils.cpp
+- config/
+        uc_params.yaml                # UC 参数配置
+- test/
+        test_ik_solver.cpp            # IK 求解器单元测试
+        test_trajectory_planner.cpp   # 轨迹规划器单元测试
+        test_force_controller.cpp     # 力控制器单元测试
+        test_self_collision.cpp       # 自碰检测单元测试
+        test_base_compensator.cpp     # 基座补偿单元测试
+        test_integration.cpp          # 集成测试（含 mock MC）
+- urdf/
+        upper_body.urdf               # 上肢 URDF（用于运动学和碰撞检测）
+- CMakeLists.txt
+- package.xml
 ```
 
 > **编译输出**：`libuc_common_plugin.so`，安装到系统 lib 目录，MC 通过 `library_path` 参数加载。

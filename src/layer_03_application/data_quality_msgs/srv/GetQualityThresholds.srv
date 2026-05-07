@@ -1,0 +1,9 @@
+# Get current quality threshold configuration
+
+---
+bool success
+float32 min_sharpness
+float32 min_density
+float32 max_noise
+float32 min_completeness
+float32 redundancy_threshold

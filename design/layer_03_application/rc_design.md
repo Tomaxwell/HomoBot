@@ -259,42 +259,38 @@ float32 avg_memory_24h
 
 ### 5.1 节点架构
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         ResourceCollectionNode                            │
-│                                                                           │
-│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐   │
-│  │  Log Collector   │    │  Metrics         │    │  Event           │   │
-│  │  (日志收集器)     │    │  Collector       │    │  Collector       │   │
-│  │                  │    │  (指标收集器)     │    │  (事件收集器)     │   │
-│  │  - rosout 订阅   │    │  - /proc 读取    │    │  - 状态转换事件   │   │
-│  │  - 格式化存储    │    │  - GPU 查询      │    │  - 任务起止事件   │   │
-│  │  - 级别过滤      │    │  - 网络统计      │    │  - 故障事件       │   │
-│  └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘   │
-│           │                       │                       │             │
-│  ┌────────▼───────────────────────▼───────────────────────▼─────────┐   │
-│  │                         Data Store                                 │   │
-│  │   (环形缓冲 → 时间分片 → 压缩归档 → 磁盘存储)                       │   │
-│  │                                                                    │   │
-│  │   - 日志：按小时分片，gzip 压缩                                    │   │
-│  │   - 指标：按 10s 聚合，降采样存储                                  │   │
-│  │   - 事件：结构化存储，支持索引                                     │   │
-│  └────────┬───────────────────────────────────────────────────────┬───┘   │
-│           │                                                       │       │
-│  ┌────────▼─────────┐   ┌──────────────────┐   ┌────────────────▼───┐   │
-│  │  Heartbeat       │   │  Summary         │   │  Query Engine      │   │
-│  │  Monitor         │   │  Generator       │   │  (查询引擎)         │   │
-│  │  (心跳监控)       │   │  (摘要生成器)     │   │                    │   │
-│  │                  │   │                  │   │  - 时间范围查询      │   │
-│  │  - 订阅各模块心跳 │   │  - 24h 统计聚合   │   │  - 模块过滤          │   │
-│  │  - 检测超时离线   │   │  - 趋势分析       │   │  - 级别过滤          │   │
-│  │  - 生成健康面板   │   │  - 上报 Gateway   │   │  - 分页返回          │   │
-│  └──────────────────┘   └──────────────────┘   └────────────────────┘   │
-│                                                                           │
-│  ┌───────────────────────────────────────────────────────────────────┐   │
-│  │                        ROS2 Service/Topic Interface               │   │
-│  └───────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph RCNode["ResourceCollectionNode"]
+        Log["Log Collector
+(日志收集器)
+· rosout 订阅 / 格式化存储 / 级别过滤"]
+        Metrics["Metrics Collector
+(指标收集器)
+· /proc 读取 / GPU 查询 / 网络统计"]
+        Event["Event Collector
+(事件收集器)
+· 状态转换事件 / 任务起止事件 / 故障事件"]
+        Store["Data Store
+(环形缓冲 → 时间分片 → 压缩归档 → 磁盘存储)"]
+        HB["Heartbeat Monitor
+(心跳监控)
+· 订阅各模块心跳 / 检测超时离线 / 生成健康面板"]
+        Summary["Summary Generator
+(摘要生成器)
+· 24h 统计聚合 / 趋势分析 / 上报 Gateway"]
+        Query["Query Engine
+(查询引擎)
+· 时间范围查询 / 模块过滤 / 级别过滤 / 分页返回"]
+        ROS2IF["ROS2 Service/Topic Interface"]
+
+        Log --> Store
+        Metrics --> Store
+        Event --> Store
+        Store --> HB
+        Store --> Summary
+        Store --> Query
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -375,23 +371,19 @@ float32 avg_memory_24h
 
 #### 时序：系统状态监控循环
 
-```
-各模块          RC           Gateway       HDS
-  │             │              │            │
-  │─heartbeat──►│              │            │
-  │             │              │            │
-  │             │─health_panel─►│            │
-  │             │              │            │
-  │             │─metrics─────►│            │
-  │             │              │            │
-  │─fault_event─►│             │            │
-  │             │              │            │
-  │             │─event────────►│            │
-  │             │              │            │
-  │             │              │            │
-  │             │─query_events─────────────►│
-  │             │◄─events───────────────────│
-  │             │              │            │
+```mermaid
+sequenceDiagram
+    participant Modules as 各模块
+    participant RC
+    participant Gateway
+    participant HDS
+    Modules->>RC: heartbeat
+    RC->>Gateway: health_panel
+    RC->>Gateway: metrics
+    Modules->>RC: fault_event
+    RC->>Gateway: event
+    RC->>HDS: query_events
+    HDS-->>RC: events
 ```
 
 ---
@@ -462,52 +454,52 @@ uint16 ERR_HEARTBEAT_TIMEOUT     = 16010   # 模块心跳超时
 
 ```
 rc_msgs/                # 消息定义包
-├── msg/
-│   ├── SystemMetrics.msg
-│   ├── ModuleHealth.msg
-│   ├── SystemEvent.msg
-│   ├── LogEntry.msg
-│   └── Heartbeat.msg
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── QueryEvents.srv
-│   ├── QueryLogs.srv
-│   ├── QueryMetrics.srv
-│   └── GetSystemSummary.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        SystemMetrics.msg
+        ModuleHealth.msg
+        SystemEvent.msg
+        LogEntry.msg
+        Heartbeat.msg
+    srv/
+        GetHealthStatus.srv
+        QueryEvents.srv
+        QueryLogs.srv
+        QueryMetrics.srv
+        GetSystemSummary.srv
+    CMakeLists.txt
+    package.xml
 
 rc/                     # 节点实现包
-├── include/rc/
-│   ├── rc_node.hpp
-│   ├── log_collector.hpp
-│   ├── metrics_collector.hpp
-│   ├── event_collector.hpp
-│   ├── heartbeat_monitor.hpp
-│   ├── data_store.hpp
-│   ├── summary_generator.hpp
-│   └── query_engine.hpp
-├── src/
-│   ├── rc_node.cpp
-│   ├── log_collector.cpp
-│   ├── metrics_collector.cpp
-│   ├── event_collector.cpp
-│   ├── heartbeat_monitor.cpp
-│   ├── data_store.cpp
-│   ├── summary_generator.cpp
-│   ├── query_engine.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_metrics_collector.cpp
-│   ├── test_heartbeat_monitor.cpp
-│   ├── test_query_engine.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── rc_params.yaml
-├── launch/
-│   └── rc.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/rc/
+        rc_node.hpp
+        log_collector.hpp
+        metrics_collector.hpp
+        event_collector.hpp
+        heartbeat_monitor.hpp
+        data_store.hpp
+        summary_generator.hpp
+        query_engine.hpp
+    src/
+        rc_node.cpp
+        log_collector.cpp
+        metrics_collector.cpp
+        event_collector.cpp
+        heartbeat_monitor.cpp
+        data_store.cpp
+        summary_generator.cpp
+        query_engine.cpp
+        main.cpp
+    test/
+        test_metrics_collector.cpp
+        test_heartbeat_monitor.cpp
+        test_query_engine.cpp
+        test_integration.cpp
+    config/
+        rc_params.yaml
+    launch/
+        rc.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ---

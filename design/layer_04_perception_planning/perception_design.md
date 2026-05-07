@@ -56,31 +56,18 @@
 
 ### 3.2 状态转换图
 
-```
-                          ┌──────────────────────────────────────────────┐
-                          │                                              │
-                    ┌─────┴────────┐   sensors_ready    ┌───────────────┴───┐
-              ┌──►  │  PERCEPTION  │───────────────────►│  PERCEPTION       │
-              │     │     INIT     │                    │    STANDBY        │
-              │     │      0       │                    │       1           │
-              │     └──────────────┘                    └─────────┬─────────┘
-              │           ▲                                       │
-              │           │         all_sensors_lost              │ sm_active
-              │           │    ┌──────────────────────────────────┘
-              │           │    ▼
-              │           │  ┌──────────────────┐   start_inference   ┌─────────────┐
-              │           │  │ PERCEPTION_FAULT │◄───────────────────│ PERCEPTION  │
-              │           │  │        4         │   critical_error    │   ACTIVE    │
-              │           │  └────────┬─────────┘                    │     2       │
-              │           │           │                              └──────┬──────┘
-              │           │           │ recover                          │
-              │           │           │                                  │ sensor_degraded
-              │           │    ┌──────┘                                  │
-              │           │    ▼                                         ▼
-              │           │  ┌──────────────────┐              ┌───────────────┐
-              └───────────┤  │PERCEPTION_DEGRADED│◄────────────│ PERCEPTION    │
-                            │        3         │   recover    │   DEGRADED    │
-                            └──────────────────┘              └───────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> PERCEPTION_INIT
+    PERCEPTION_INIT --> PERCEPTION_STANDBY : sensors_ready
+    PERCEPTION_INIT --> PERCEPTION_FAULT : all_sensors_lost
+    PERCEPTION_STANDBY --> PERCEPTION_ACTIVE : sm_active
+    PERCEPTION_STANDBY --> PERCEPTION_DEGRADED : sensor_degraded
+    PERCEPTION_ACTIVE --> PERCEPTION_DEGRADED : sensor_degraded
+    PERCEPTION_DEGRADED --> PERCEPTION_ACTIVE : recover
+    PERCEPTION_ACTIVE --> PERCEPTION_FAULT : critical_error
+    PERCEPTION_DEGRADED --> PERCEPTION_FAULT : critical_error
+    PERCEPTION_FAULT --> PERCEPTION_INIT : recover
 ```
 
 ### 3.3 状态转换表
@@ -293,53 +280,40 @@ ObstacleList obstacles
 
 ### 5.1 节点架构
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         PerceptionNode                                    │
-│                                                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │                     Sensor Input Manager                             │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐ │  │
-│  │  │   Camera    │  │    Lidar    │  │     IMU     │  │   Force    │ │  │
-│  │  │  Receiver   │  │  Receiver   │  │  Receiver   │  │  Receiver  │ │  │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘ │  │
-│  │         │                │                │               │        │  │
-│  │         └────────────────┴────────────────┴───────────────┘        │  │
-│  │                              │                                      │  │
-│  │                    Time Synchronizer                                │  │
-│  │                    (时间同步 + 帧对齐)                               │  │
-│  └──────────────────────────────┬─────────────────────────────────────┘  │
-│                                 │                                         │
-│  ┌──────────────────────────────▼─────────────────────────────────────┐  │
-│  │                     Perception Pipeline                              │  │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────────────┐  │  │
-│  │  │  Vision       │  │  Point Cloud  │  │   Fusion Engine       │  │  │
-│  │  │  Processor    │  │  Processor    │  │  (多传感器融合)        │  │  │
-│  │  │               │  │               │  │                       │  │  │
-│  │  │ - Detection   │  │ - Filtering   │  │ - Spatial alignment   │  │  │
-│  │  │ - Segmentation│  │ - Ground seg  │  │ - Temporal tracking   │  │  │
-│  │  │ - Keypoints   │  │ - Clustering  │  │ - Result merging      │  │  │
-│  │  └───────┬───────┘  └───────┬───────┘  └───────────┬───────────┘  │  │
-│  │          │                  │                      │               │  │
-│  │          └──────────────────┼──────────────────────┘               │  │
-│  │                             │                                      │  │
-│  │  ┌──────────────────────────▼──────────────────────────────────┐  │  │
-│  │  │              Model Inference Manager (TensorRT)               │  │  │
-│  │  │  - ONNX模型加载                                              │  │  │
-│  │  │  - TensorRT优化                                              │  │  │
-│  │  │  - 推理调度（多模型并行/串行）                                 │  │  │
-│  │  │  - 批处理（batching）                                        │  │  │
-│  │  └─────────────────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │                     Output Publisher                               │  │
-│  │  - /perception/obstacles                                           │  │
-│  │  - /perception/semantics                                           │  │
-│  │  - /perception/traversable                                         │  │
-│  │  - /perception/result                                              │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph PerceptionNode["PerceptionNode"]
+        subgraph SIM["Sensor Input Manager"]
+            CR["Camera Receiver"]
+            LR["Lidar Receiver"]
+            IR["IMU Receiver"]
+            FR["Force/Touch Receiver"]
+            TS["Time Synchronizer (Hard Sync)"]
+        end
+
+        subgraph PP["Perception Pipeline"]
+            VP["Vision Processor
+Detection / Segmentation / Keypoints"]
+            PCP["Point Cloud Processor
+Filtering / Ground seg / Clustering"]
+            FE["Fusion Engine
+Spatial alignment / Temporal tracking / Result merging"]
+            MIM["Model Inference Manager (TensorRT)"]
+        end
+
+        OP["Output Publisher
+/perception/obstacles / semantics / traversable / result / multimodal_sync_frame"]
+    end
+
+    CR --> TS
+    LR --> TS
+    IR --> TS
+    FR --> TS
+    TS --> PP
+    VP --> FE
+    PCP --> FE
+    FE --> MIM
+    PP --> OP
 ```
 
 ### 5.2 关键设计决策
@@ -427,20 +401,21 @@ HAL_Sensor       Perception       PnC       VSLAM
   │                │─semantics────────────────►│
   │                │              │          │
   │                │              │─规划路径──►
+```mermaid
+sequenceDiagram
+    participant HAL_Sensor
+    participant Perception
+    participant PnC
+    participant VSLAM
+
+    HAL_Sensor->>Perception: image_raw
+    HAL_Sensor->>Perception: point_cloud
+    Perception->>Perception: 同步处理
+    Perception->>PnC: obstacles
+    Perception->>PnC: traversable
+    Perception->>VSLAM: semantics
+    PnC->>VSLAM: 规划路径
 ```
-
----
-
-## 7. 关键参数与配置
-
-| 参数名 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `inference_mode` | int | 0 | 推理模式（0=balanced, 1=accuracy, 2=speed, 3=low_power） |
-| `target_fps` | float | 10.0 | 目标推理帧率 |
-| `sync_window_ms` | int | 50 | 传感器时间同步窗口（ms） |
-| `model_path` | string | "/opt/robot/models/" | 模型文件目录 |
-| `detection_confidence_threshold` | float | 0.5 | 检测置信度阈值 |
-| `tracking_max_age` | int | 5 | 跟踪丢失最大帧数 |
 | `ground_segmentation_distance_threshold` | float | 0.05 | 地面分割距离阈值（m） |
 | `cluster_tolerance` | float | 0.2 | 点云聚类容差（m） |
 | `min_cluster_size` | int | 50 | 最小聚类点数 |
@@ -515,55 +490,55 @@ perception_msgs/        # 消息定义包
 │   └── Heartbeat.msg
 ├── srv/
 │   ├── GetHealthStatus.srv
-│   ├── SetInferenceMode.srv
-│   └── GetObstacles.srv
-├── CMakeLists.txt
-└── package.xml
+```
+perception_msgs/        # 消息定义包
+    msg/
+        PerceptionState.msg
+        Obstacle.msg
+        ObstacleList.msg
+        SemanticSegment.msg
+        TraversableRegion.msg
+        PerceptionResult.msg
+        Heartbeat.msg
+    srv/
+        GetHealthStatus.srv
+        SetInferenceMode.srv
+        GetObstacles.srv
+    CMakeLists.txt
+    package.xml
 
 perception/             # 节点实现包
-├── include/perception/
-│   ├── perception_node.hpp
-│   ├── sensor_input_manager.hpp
-│   ├── time_synchronizer.hpp
-│   ├── vision_processor.hpp
-│   ├── point_cloud_processor.hpp
-│   ├── fusion_engine.hpp
-│   ├── model_inference_manager.hpp
-│   └── output_publisher.hpp
-├── src/
-│   ├── perception_node.cpp
-│   ├── sensor_input_manager.cpp
-│   ├── time_synchronizer.cpp
-│   ├── vision_processor.cpp
-│   ├── point_cloud_processor.cpp
-│   ├── fusion_engine.cpp
-│   ├── model_inference_manager.cpp
-│   ├── output_publisher.cpp
-│   └── main.cpp
-├── test/
-│   ├── test_fusion_engine.cpp
-│   ├── test_vision_processor.cpp
-│   ├── test_point_cloud.cpp
-│   └── test_integration.cpp
-├── config/
-│   └── perception_params.yaml
-├── launch/
-│   └── perception.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/perception/
+        perception_node.hpp
+        sensor_input_manager.hpp
+        time_synchronizer.hpp
+        vision_processor.hpp
+        point_cloud_processor.hpp
+        fusion_engine.hpp
+        model_inference_manager.hpp
+        output_publisher.hpp
+    src/
+        perception_node.cpp
+        sensor_input_manager.cpp
+        time_synchronizer.cpp
+        vision_processor.cpp
+        point_cloud_processor.cpp
+        fusion_engine.cpp
+        model_inference_manager.cpp
+        output_publisher.cpp
+        main.cpp
+    test/
+        test_fusion_engine.cpp
+        test_vision_processor.cpp
+        test_point_cloud.cpp
+        test_integration.cpp
+    config/
+        perception_params.yaml
+    launch/
+        perception.launch.py
+    CMakeLists.txt
+    package.xml
 ```
-
----
-
-## 11. 关键性能指标 (KPI)
-
-| 指标 | 目标值 | 说明 |
-|------|--------|------|
-| 端到端推理延迟 | < 100ms | 从传感器数据到感知结果输出 |
-| 目标检测帧率 | > 10 FPS | 障碍物检测 |
-| 语义分割帧率 | > 5 FPS | 场景理解 |
-| 点云处理帧率 | > 10 FPS | 点云滤波+聚类 |
-| 目标跟踪准确率 | > 95% | MOTA指标 |
 | 检测精度 (mAP) | > 0.85 | COCO标准 |
 | GPU利用率 | < 80% | 单帧推理时 |
 | GPU内存占用 | < 2GB | 稳态运行时 |

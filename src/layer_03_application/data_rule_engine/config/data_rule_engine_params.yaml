@@ -1,0 +1,18 @@
+data_rule_engine:
+  # Engine configuration
+  max_rules: 100
+  max_topic_subscriptions: 50
+  evaluation_interval_ms: 100
+  default_cooldown_sec: 30
+
+  # Rules file
+  rules_file_path: "/opt/striding/rules/data_collection_rules.yaml"
+  auto_reload_rules: true
+  reload_debounce_sec: 5
+
+  # Trigger limits
+  max_triggers_per_minute: 20
+  burst_protection: true
+
+  # Logging
+  log_retention_days: 30

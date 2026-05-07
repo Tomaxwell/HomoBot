@@ -182,25 +182,22 @@ string message
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    HalSensorNode                             │
-├─────────────────────────────────────────────────────────────┤
-│  ImuDriver                                                   │
-│  ├─ SPI/I2C/UART 通信接口（取决于 IMU 型号）                │
-│  ├─ 数据解析与校准                                          │
-│  └─ 200Hz 发布线程                                          │
-├─────────────────────────────────────────────────────────────┤
-│  TouchDriver                                                 │
-│  ├─ I2C/USB 通信接口                                        │
-│  ├─ 压力/温度数据解析                                       │
-│  └─ 50Hz 发布线程                                           │
-├─────────────────────────────────────────────────────────────┤
-│  EnvMonitor                                                  │
-│  ├─ 电池管理芯片读取                                        │
-│  ├─ 温湿度传感器读取                                        │
-│  └─ 1Hz 发布线程                                            │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HalSensorNode
+        ImuDriver["ImuDriver
+· SPI/I2C/UART 通信接口
+· 数据解析与校准
+· 200Hz 发布线程"]
+        TouchDriver["TouchDriver
+· I2C/USB 通信接口
+· 压力/温度数据解析
+· 50Hz 发布线程"]
+        EnvMonitor["EnvMonitor
+· 电池管理芯片读取
+· 温湿度传感器读取
+· 1Hz 发布线程"]
+    end
 ```
 
 ### 5.2 关键设计决策
@@ -287,30 +284,30 @@ string message
 
 ```
 hal_sensor_msgs/
-├── msg/
-│   ├── SensorHubState.msg
-│   ├── TouchData.msg
-│   ├── EnvData.msg
-│   ├── Heartbeat.msg
-│   └── ErrorCode.msg               # 错误码（原名 HalSensorErrorCode.msg）
-├── srv/
-│   ├── GetHealthStatus.srv
-│   ├── SetImuRate.srv
-│   └── SetTouchSensitivity.srv
-├── CMakeLists.txt
-└── package.xml
+    msg/
+        SensorHubState.msg
+        TouchData.msg
+        EnvData.msg
+        Heartbeat.msg
+        ErrorCode.msg               # 错误码（原名 HalSensorErrorCode.msg）
+    srv/
+        GetHealthStatus.srv
+        SetImuRate.srv
+        SetTouchSensitivity.srv
+    CMakeLists.txt
+    package.xml
 
 hal_sensor/
-├── include/hal_sensor/
-│   └── hal_sensor_node.hpp
-├── src/
-│   └── hal_sensor_node.cpp
-├── config/
-│   └── hal_sensor_params.yaml
-├── launch/
-│   └── hal_sensor.launch.py
-├── CMakeLists.txt
-└── package.xml
+    include/hal_sensor/
+        hal_sensor_node.hpp
+    src/
+        hal_sensor_node.cpp
+    config/
+        hal_sensor_params.yaml
+    launch/
+        hal_sensor.launch.py
+    CMakeLists.txt
+    package.xml
 ```
 
 ## 11. 关键性能指标（KPI）

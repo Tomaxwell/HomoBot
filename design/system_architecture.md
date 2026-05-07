@@ -2,7 +2,7 @@
 
 > 版本：v1.0
 > 日期：2026-05-06
-> 范围：端侧本体软件全部 27 个模块
+> 范围：端侧本体软件全部 30 个模块
 
 ---
 
@@ -52,6 +52,9 @@
 │  应用层       FOTA (固件升级)                                        │
 │              Setting (设置管理)                                      │
 │              DR (数据采集/VLA训练数据)                                │
+│              DataUploader (数据资产上传，带宽隔离)                    │
+│              DataRuleEngine (数据规则引擎，边端规则解析)              │
+│              DataQualityFilter (数据质量过滤，1kHz实时评估)           │
 │              RC (资源收集/日志聚合)                                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │  感知/规划层  Perception (视觉+Lidar感知融合)                         │
@@ -105,6 +108,9 @@
 | **FOTA** | Firmware Over The Air | 应用层 | 固件下载/验证/安装/回滚 | [fota_design.md](layer_03_application/fota_design.md) |
 | **Setting** | Setting | 应用层 | 统一参数存储，Schema验证，热更新 | [setting_design.md](layer_03_application/setting_design.md) |
 | **RC** | Resource Collection | 应用层 | 日志聚合，性能监控，事件收集 | [rc_design.md](layer_03_application/rc_design.md) |
+| **DataUploader** | Data Uploader | 应用层 | 数据资产上传，带宽隔离，断点续传，压缩加密 | [data_uploader_design.md](layer_03_application/data_uploader/data_uploader_design.md) |
+| **DataRuleEngine** | Data Rule Engine | 应用层 | 边端规则解析，多维度触发，冲突仲裁，热重载 | [data_rule_engine_design.md](layer_03_application/data_rule_engine/data_rule_engine_design.md) |
+| **DataQualityFilter** | Data Quality Filter | 应用层 | 1kHz实时数据质量评估，冗余检测，模糊/噪声检测 | [data_quality_filter_design.md](layer_03_application/data_quality_filter/data_quality_filter_design.md) |
 | **HAL_EtherCAT** | EtherCAT HAL | HAL & Infra | SOEM主站，EtherCAT从站管理，SDO/PDO通信 | [hal_ethercat_design.md](layer_07_hal_infra/hal_ethercat_design.md) |
 | **HAL_Camera** | Camera HAL | HAL & Infra | RealSense相机管理（D435×1 + D405×2） | [hal_camera_design.md](layer_07_hal_infra/hal_camera_design.md) |
 | **HAL_Lidar** | Lidar HAL | HAL & Infra | Livox Mid-360s固态激光雷达管理 | [hal_lidar_design.md](layer_07_hal_infra/hal_lidar_design.md) |
