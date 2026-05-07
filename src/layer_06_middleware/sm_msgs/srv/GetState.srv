@@ -1,3 +1,6 @@
+# sm_msgs/srv/GetState.srv
+# 查询当前状态
+
 ---
 uint8 state
 builtin_interfaces/Time entered_at

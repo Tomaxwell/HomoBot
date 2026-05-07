@@ -1,3 +1,6 @@
+# sm_msgs/msg/ErrorCode.msg
+# SM 模块错误码定义
+
 uint16 OK                               = 0
 uint16 ERR_SM_INVALID_TRANSITION        = 1001
 uint16 ERR_SM_PRIORITY_TOO_LOW          = 1002

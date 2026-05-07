@@ -8,8 +8,23 @@ find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-file(GLOB msg_files "msg/*.msg")
-file(GLOB srv_files "srv/*.srv")
+set(msg_files
+  "msg/RobotState.msg"
+  "msg/TransitionEvent.msg"
+  "msg/Heartbeat.msg"
+  "msg/ErrorCode.msg"
+)
+
+set(srv_files
+  "srv/RequestTransition.srv"
+  "srv/GetState.srv"
+  "srv/TriggerEStop.srv"
+  "srv/VoiceEStop.srv"
+  "srv/ReleaseEStop.srv"
+  "srv/AcknowledgeFault.srv"
+  "srv/IsMotionAllowed.srv"
+  "srv/GetHealthStatus.srv"
+)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}

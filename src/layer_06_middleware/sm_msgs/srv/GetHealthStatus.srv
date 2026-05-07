@@ -1,3 +1,6 @@
+# sm_msgs/srv/GetHealthStatus.srv
+# SM 模块健康状态查询
+
 ---
 bool success
 string node_name

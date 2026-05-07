@@ -1,3 +1,6 @@
+# sm_msgs/srv/IsMotionAllowed.srv
+# 运动模块调用：查询当前是否允许运动指令
+
 ---
 bool allowed
 uint8 current_state

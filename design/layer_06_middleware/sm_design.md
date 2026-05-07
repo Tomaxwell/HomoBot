@@ -24,6 +24,10 @@
 | SM ↔ MC/MS/MP | 提供状态查询，拒绝非法状态下的运动 | 运动执行，调用前校验状态 |
 | SM ↔ Gateway | 接受用户侧操作指令（解除急停等） | 云端通信，转发用户操作 |
 | SM ↔ TE | 接受任务引擎的状态转换请求 | 任务调度与编排 |
+| SM ↔ Voice 子系统 | 接受语音 KWS_RT 触发的急停请求 | 关键词识别与 E-Stop 信号化（独立 systemd 服务） |
+
+**相关文档**：
+- [Voice Interaction Subsystem](../../subsystem/voice_interaction_subsystem.md) — 语音交互子系统软硬件方案，定义独立 KWS_RT → SM 急停通道（参见该文 §6 与本文 §3.2 / §8.5）
 
 ---
 
@@ -155,7 +159,7 @@ stateDiagram-v2
 | `ACTIVE_STAND` | `ACTIVE_ZERO_TORQUE` | 进入零力矩模式 | Gateway（operator） | 20 |
 | `ACTIVE_STAND` | `ACTIVE_DAMPING` | 进入阻尼模式 | Gateway（operator） | 20 |
 | `ACTIVE_STAND` | `STANDBY` | 去激活运动控制 | TE / Gateway | 40 |
-| `ACTIVE_STAND` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_STAND` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_STAND` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_STAND` | `DEGRADED` | 非关键模块故障 | HDS | 80 |
 | `ACTIVE_READY` | `ACTIVE_STAND` | 回到站立 | TE / MC | 40 |
@@ -163,40 +167,40 @@ stateDiagram-v2
 | `ACTIVE_READY` | `ACTIVE_WALKING` | 开始持续走路 | TE / PnC | 40 |
 | `ACTIVE_READY` | `ACTIVE_SQUAT` | 下蹲指令 | TE / Gateway | 40 |
 | `ACTIVE_READY` | `ACTIVE_SIT` | 坐下指令 | TE / Gateway | 40 |
-| `ACTIVE_READY` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_READY` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_READY` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_READY` | `DEGRADED` | 非关键模块故障 | HDS | 80 |
 | `ACTIVE_MOTION` | `ACTIVE_READY` | 动作完成 / 取消 | TE | 40 |
 | `ACTIVE_MOTION` | `ACTIVE_STAND` | 回到站立 | TE / MC | 40 |
-| `ACTIVE_MOTION` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_MOTION` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_MOTION` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_MOTION` | `DEGRADED` | 非关键模块故障 | HDS | 80 |
 | `ACTIVE_WALKING` | `ACTIVE_READY` | 停止走路 | TE / PnC | 40 |
 | `ACTIVE_WALKING` | `ACTIVE_STAND` | 回到站立 | TE / PnC | 40 |
-| `ACTIVE_WALKING` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_WALKING` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_WALKING` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_WALKING` | `DEGRADED` | 非关键模块故障 | HDS | 80 |
 | `ACTIVE_SQUAT` | `ACTIVE_STAND` | 起立 | TE / Gateway | 40 |
 | `ACTIVE_SQUAT` | `ACTIVE_SIT` | 继续坐下 | TE / Gateway | 40 |
 | `ACTIVE_SQUAT` | `ACTIVE_READY` | 预备 | TE / MC | 40 |
-| `ACTIVE_SQUAT` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_SQUAT` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_SQUAT` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_SQUAT` | `DEGRADED` | 非关键模块故障 | HDS | 80 |
 | `ACTIVE_SIT` | `ACTIVE_SQUAT` | 起身（过渡） | TE / Gateway | 40 |
 | `ACTIVE_SIT` | `ACTIVE_STAND` | 直接起立 | TE / Gateway | 40 |
 | `ACTIVE_SIT` | `ACTIVE_READY` | 预备 | TE / MC | 40 |
-| `ACTIVE_SIT` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_SIT` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_SIT` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_SIT` | `DEGRADED` | 非关键模块故障 | HDS | 80 |
 | `ACTIVE_ZERO_TORQUE` | `ACTIVE_STAND` | 恢复控制 | Gateway（operator） | 20 |
 | `ACTIVE_ZERO_TORQUE` | `ACTIVE_DAMPING` | 切换阻尼模式 | Gateway（operator） | 20 |
 | `ACTIVE_ZERO_TORQUE` | `ACTIVE_READY` | 恢复预备 | Gateway（operator） | 20 |
-| `ACTIVE_ZERO_TORQUE` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_ZERO_TORQUE` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_ZERO_TORQUE` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_DAMPING` | `ACTIVE_STAND` | 恢复控制 | Gateway（operator） | 20 |
 | `ACTIVE_DAMPING` | `ACTIVE_ZERO_TORQUE` | 切换零力矩模式 | Gateway（operator） | 20 |
 | `ACTIVE_DAMPING` | `ACTIVE_READY` | 恢复预备 | Gateway（operator） | 20 |
-| `ACTIVE_DAMPING` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop | 100 |
+| `ACTIVE_DAMPING` | `ACTIVE_E_STOP` | 急停触发 | MC, EM, HDS, Gateway, hardware_estop, voice_kws_rt | 100 |
 | `ACTIVE_DAMPING` | `FAULT` | 关键故障 | HDS | 80 |
 | `ACTIVE_E_STOP` | `ACTIVE_STAND` | 人工确认解除急停 | Gateway（operator） | 20 |
 | `ACTIVE_E_STOP` | `FAULT` | 急停后检测到硬件损坏 | HDS | 80 |
@@ -300,6 +304,11 @@ uint16 ERR_SM_ALREADY_IN_STATE          = 1007   # 已经处于目标状态
 uint16 ERR_SM_SHUTTING_DOWN             = 1008   # 系统正在关机，拒绝所有请求
 uint16 ERR_SM_BOOT_TIMEOUT              = 1009   # 启动超时
 uint16 ERR_SM_CONCURRENT_TRANSITION     = 1010   # 正在处理另一个转换请求
+uint16 ERR_SM_CHARGING                  = 1011   # 当前处于充电状态，禁止运动
+uint16 ERR_SM_UPDATING                  = 1012   # 当前处于升级状态，禁止运动
+uint16 ERR_SM_DEBUG_MODE                = 1013   # 当前处于调试模式，运动需特殊授权
+uint16 ERR_SM_ZERO_TORQUE_MODE          = 1014   # 当前处于零力矩模式，拒绝主动运动指令
+uint16 ERR_SM_DAMPING_MODE              = 1015   # 当前处于阻尼模式，拒绝主动运动指令
 
 uint16 error_code                       # 错误码
 string message                          # 可读错误描述
@@ -348,6 +357,26 @@ string reason                       # 急停原因
 ---
 # Response
 bool accepted                       # 是否被接受（仅 SHUTTING_DOWN 时拒绝）
+uint16 error_code                   # 错误码
+string message                      # 结果描述
+```
+
+```
+# sm_msgs/srv/VoiceEStop.srv
+# 语音 KWS_RT 触发急停（专用通道，仅 estop_voice_service 调用）
+# 与 TriggerEStop 等价的安全效果，但携带语音审计字段
+# priority 在 SM 内部硬编码为 100，调用方无需提供
+
+# Request
+uint8 keyword_id                    # 关键词 ID（"stop"=1, "halt"=2, "停止"=3, "别动"=4, "danger"=5, "危险"=6, "help"=7, "救命"=8）
+float32 score                       # KWS 置信度 [0.0, 1.0]
+builtin_interfaces/Time detected_at # DSP 检测到关键词的时间戳（边沿对齐）
+string source                       # 固定填 "voice_kws_rt"，便于审计区分
+---
+# Response
+bool accepted                       # 是否被接受（仅 SHUTTING_DOWN 时拒绝）
+uint8 prev_state                    # 触发前状态（审计用）
+builtin_interfaces/Time acted_at    # SM 完成状态切换的时间戳
 uint16 error_code                   # 错误码
 string message                      # 结果描述
 ```
@@ -429,6 +458,7 @@ uint32 rejected_transitions         # 拒绝的转换次数
 | `/sm/request_transition` | `sm_msgs/srv/RequestTransition` | EM, HDS, TE, Gateway | 请求状态转换 |
 | `/sm/get_state` | `sm_msgs/srv/GetState` | 任意模块 | 查询当前状态 |
 | `/sm/trigger_estop` | `sm_msgs/srv/TriggerEStop` | 任意模块 | 触发急停（priority=100） |
+| `/sm/voice_estop` | `sm_msgs/srv/VoiceEStop` | estop_voice_service（语音子系统专用） | 语音 KWS_RT 急停通道（priority=100，独立审计字段） |
 | `/sm/release_estop` | `sm_msgs/srv/ReleaseEStop` | Gateway（人工） | 解除急停 |
 | `/sm/acknowledge_fault` | `sm_msgs/srv/AcknowledgeFault` | Gateway（人工） | 确认故障 |
 | `/sm/is_motion_allowed` | `sm_msgs/srv/IsMotionAllowed` | MC, MS, MP, PnC | 运动前状态校验 |
@@ -495,18 +525,24 @@ EM 启动 SM 进程
 #### 4.3.2 E-Stop 触发流程
 
 ```
-白名单模块（MC, EM, HDS, Gateway, hardware_estop）调用 /sm/trigger_estop
-  → E-Stop Handler 收到请求（独立回调组，不阻塞）
+触发源：
+  - 白名单 ROS2 模块（MC, EM, HDS, Gateway）→ /sm/trigger_estop
+  - hardware_estop（硬件按钮 GPIO IRQ → estop_hardware_service）→ /sm/trigger_estop
+  - voice_kws_rt（语音 KWS_RT → estop_voice_service，systemd RT prio 90）→ /sm/voice_estop
+  → E-Stop Handler 收到请求（独立回调组，所有 E-Stop 入口共用）
+  → priority 在 SM 内部硬编码为 100，请求侧无法降级
   → 检查当前状态：
       - ACTIVE_STAND / ACTIVE_READY / ACTIVE_SQUAT / ACTIVE_SIT / ACTIVE_MOTION / ACTIVE_WALKING / ACTIVE_ZERO_TORQUE / ACTIVE_DAMPING / DEGRADED → 立即转为 ACTIVE_E_STOP
-      - ACTIVE_E_STOP → 已是急停，返回 accepted=true
+      - ACTIVE_E_STOP → 已是急停，返回 accepted=true，记录新审计源
       - CHARGING → 断开充电回路，转为 ACTIVE_E_STOP
       - FAULT / SHUTTING_DOWN → 返回 accepted=false (已在更高级别保护)
       - BOOTING / STANDBY / UPDATING / DEBUG → 转为 FAULT（无运动上下文或不宜中断）
   → 发布 /sm/robot_state (ACTIVE_E_STOP)
-  → 发布 /sm/transition_event（记录完整审计日志）
+  → 发布 /sm/transition_event（记录完整审计日志，VoiceEStop 还会记录 keyword_id/score/source="voice_kws_rt"）
   → MC/MS/MP 订阅 /sm/robot_state，收到后立即锁定运动
 ```
+
+> **同时多源触发**：见 §8.5「E-Stop 来源仲裁」。多个触发源同时到达时，状态变更只发生一次（幂等），但所有源都会记录到 transition_event，便于事后定责。
 
 #### 4.3.3 故障恢复流程
 
@@ -683,7 +719,39 @@ state_manager:
 
 - 所有转换请求（无论接受/拒绝）都记录到 `/sm/transition_event`
 - 记录字段：时间戳、请求者节点、原因、优先级、接受/拒绝、拒绝原因
+- 通过 `/sm/voice_estop` 触发的急停额外记录 `keyword_id` / `score` / `source="voice_kws_rt"` 到 `reason` 字段（JSON 形式）
 - DR 模块订阅该 Topic 持久化存储
+
+### 8.5 E-Stop 来源仲裁
+
+E-Stop 的"是否触发"由 priority=100 决定，所有合法源等价；但当多个源在极短窗口（≤ 100ms）内同时到达时，需要确定**谁是"官方触发源"**用于：
+1. `transition_event.requester_node` 的归属（事后定责）
+2. 解除急停时的恢复策略选择（如硬件 E-Stop 必须人工到现场目视检查）
+3. HDS 故障定级时的根因分析
+
+#### 仲裁优先级表
+
+| 排序 | 来源 | requester_node | 触发通道 | 解除策略 |
+|------|------|---------------|----------|----------|
+| 1（最高）| 硬件急停按钮 | `hardware_estop` | GPIO IRQ → estop_hardware_service → `/sm/trigger_estop` | 必须人工到现场，目视检查后通过 Gateway 解除 |
+| 2 | 触觉急停（皮肤碰撞/夹手） | `touch_estop` | HAL_Sensor → `/sm/trigger_estop` | 必须人工确认无受困物，Gateway 解除 |
+| 3 | 语音急停（KWS_RT）| `voice_kws_rt` | DSP → estop_voice_service → `/sm/voice_estop` | 可由现场操作人员经 Gateway 解除（≤ 5min 等待期） |
+| 4 | Gateway/APP 主动急停 | `gateway_estop` | APP/云端 → Gateway → `/sm/trigger_estop` | 远程操作员可经 Gateway 解除 |
+| 5 | 软件内部触发（HDS/MC/EM）| `hds_estop` / `mc_estop` / `em_estop` | 模块内部检测 → `/sm/trigger_estop` | 视故障类型，可能要求 HDS 复检通过 |
+
+#### 仲裁规则
+
+1. **第一到达优先**：第一个到达 SM E-Stop Handler 的请求执行状态切换，`requester_node` 记录该源
+2. **后续到达旁记**：状态已是 `ACTIVE_E_STOP` 时，后续 E-Stop 请求返回 `accepted=true` 但仅追加到 `/sm/transition_event` 的"补充触发源"字段（不再切换状态）
+3. **100ms 仲裁窗口**：状态切换完成后 100ms 内到达的所有 E-Stop 源都视为"同源触发组"，写入同一审计记录
+4. **解除时按最高源决定策略**：解除急停时检查同源触发组中排序最高的源，按其策略要求 operator_id 与现场检查级别（见 `/sm/release_estop` 的扩展字段）
+5. **Voice E-Stop 不可单独解除硬件 E-Stop**：若同源触发组包含 `hardware_estop` / `touch_estop`，必须严格按硬件级解除流程（不允许仅凭 voice 判定为"误触发"自动解除）
+
+#### 不允许的仲裁逻辑
+
+- **禁止丢弃语音 E-Stop**：即使 KWS 置信度 < 阈值，到达 SM 的请求也必须执行（语音子系统应在 KWS_RT 内做置信度过滤，不依赖 SM 二次过滤）
+- **禁止超时自动解除**：任何来源的 E-Stop 都不允许"X 秒后自动解除"
+- **禁止 voice_kws_rt 直连 release**：`/sm/release_estop` 仍然只允许 Gateway（人工）调用，语音不在解除路径上
 
 ---
 
@@ -700,6 +768,7 @@ sm_msgs/
         RequestTransition.srv       # 请求状态转换
         GetState.srv                # 查询当前状态
         TriggerEStop.srv            # 触发急停
+        VoiceEStop.srv              # 语音 KWS_RT 急停专用通道（含审计字段）
         ReleaseEStop.srv            # 解除急停
         AcknowledgeFault.srv        # 确认故障
         IsMotionAllowed.srv         # 运动前校验
@@ -747,3 +816,125 @@ sm/
 | SM 自身 CPU 占用 | < 0.5% |
 | SM 自身内存占用 | < 30MB |
 | 系统启动到 STANDBY 状态 | < 30s（由 boot_timeout_sec 约束） |
+
+---
+
+## 11. 设计审查记录
+
+### 11.1 综合审查报告（2026-05-07）
+
+**模块**：SM（State Manager）
+**审查范围**：本次纳入 VoiceEStop.srv 与 E-Stop 来源仲裁机制的增量设计
+**审查方式**：safety-validator + architecture-advisor 并行审查
+**总体判决**：**APPROVED_WITH_CONDITIONS**
+
+> 两位评审独立判定为 *有条件通过*：当前设计在功能层面闭环，但在**安全攻击面**与**跨模块治理边界**上存在 8 项高优先级未决项，需在合入实现前补齐。
+
+---
+
+### 11.2 安全审查结果（safety-validator）
+
+**红线核查**（全部通过）：
+- ✅ `ACTIVE_E_STOP` / `FAULT` 状态拒绝运动指令（§4.4 `is_motion_allowed`）
+- ✅ E-Stop 解除必须人工（`ReleaseEStop.srv` 强制 `operator_id`，§3.2 / §4.3.3）
+- ✅ E-Stop 优先级硬编码 100，调用方不可覆盖（§3.2 / §4.3.2 / §8.5）
+- ✅ `BOOTING` 超时进入 `FAULT`（§2.3 转换矩阵 + §7 错误码 `ERR_SM_BOOT_TIMEOUT`）
+- ✅ 只有 SM 修改全局状态（§1.1 设计原则 1）
+
+**HIGH 项（必须修复）**：
+
+| # | 风险点 | 描述 | 建议修复 |
+|---|--------|------|---------|
+| **S-H1** | `keyword_id` 白名单未在 SM 端二次校验 | VoiceEStop.srv 的 `keyword_id` 由 `estop_voice_service` 解析后传入，SM 当前仅审计、不重新校验。若 KWS 服务被劫持/误升级，SM 会无条件接受任何 `keyword_id` 并触发急停 | 在 `estop_handler.cpp` 中新增 `is_valid_voice_keyword(uint8 id)` 二次校验函数，仅放行 §3.2 列出的 1–8 ID；非法 ID 拒绝并记 `ERR_SM_INVALID_KEYWORD` |
+| **S-H2** | ROS2 service 调用方身份在默认 DDS 下不可强制 | §3.3 注明 `/sm/voice_estop` 仅 `estop_voice_service` 调用、`/sm/trigger_estop` 排除 voice 节点，但默认 DDS 无 ACL，任何节点均可调用 | （a）启用 DDS Security（governance.xml + permissions.xml 限定 service ACL）；或（b）通过 systemd socket 单元 + Unix domain socket 隔离 estop_voice_service 通道；二选一并在 §8.5 文档化 |
+| **S-H3** | 100ms 仲裁窗口对"解除策略"覆盖不全 | §8.5 仲裁规则只规定**触发**期间的去重，未规定**解除阶段**多源 `ReleaseEStop` 并发的处理。若 hardware 急停未解除而 voice 通道收到误解除指令，可能产生半解除态 | 明确 §8.5 增补："Release 不接受多源仲裁，必须所有触发源都被显式确认（hardware estop 引脚 + 软触发审计列表均清空）才允许 `ACTIVE_E_STOP → ACTIVE_IDLE`" |
+| **S-H4** | "voice E-Stop 不允许丢弃" + "SM 无二次过滤" 组合 → DoS 面 | §8.5 规则 4 规定 voice 急停"不允许丢弃"，且无频率/速率限制；如果 KWS 因模型漂移误识别频繁触发，SM 将不断 `ACTIVE_IDLE ↔ ACTIVE_E_STOP` 抖动 | 在 `estop_handler` 中加入"重复触发抑制"：同一 `source` 在 `ACTIVE_E_STOP` 已激活时直接返回 `accepted=true, prev_state=ACTIVE_E_STOP` 而不重入转换；并把 KWS 误触率作为 §10 KPI 的监控项 |
+
+**MEDIUM 项**：
+- M-1：§8.4 audit log 未规定保留期与轮转策略，可能在长时间运行后写满磁盘
+- M-2：§4.3.2 多源同时到达时"first-arrival wins"未明确 SM 内部如何打时间戳（接收时间还是 header 时间），影响审计因果链可信度
+- M-3：`VoiceEStop.srv` 的 `score` 字段未规定低分阈值；KWS 输出 0.0–0.3 之间的"勉强识别"是否应该触发？建议在 `estop_voice_service` 侧加置信度门槛，SM 端不重复判断
+
+**LOW 项**：
+- L-1：§7 错误码缺 `ERR_SM_INVALID_KEYWORD`（配合 S-H1 修复）
+- L-2：`VoiceEStop.srv` 字段命名 `detected_at` 与 ROS2 通行 `stamp` 风格不一致（不阻塞，未来统一）
+
+---
+
+### 11.3 架构审查结果（architecture-advisor）
+
+**架构原则核查**（部分通过）：
+- ✅ 单一状态源（SM 是唯一状态写入者）
+- ✅ 云端入口唯一（VoiceEStop 不涉及云端）
+- ⚠️ **进程治理中枢唯一性受冲击**：`estop_voice_service` / `estop_hardware_service` 由 systemd 直接拉起，绕过 EM —— 当前未在 EM / SM 设计中正式声明这一例外
+- ✅ 接口风格一致（VoiceEStop 字段命名遵守 snake_case，错误码沿用 ErrorCode.msg）
+
+**HIGH 项（必须修复）**：
+
+| # | 问题 | 描述 | 建议修复 |
+|---|------|------|---------|
+| **A-H1** | EM 进程治理 vs Tier-0 安全旁路冲突未文档化 | `estop_voice_service` 与（未来的）`estop_hardware_service` 走 systemd RT 服务，独立于 EM 编排，但 CLAUDE.md "禁止非 EM 启停其他进程" 与之矛盾。当前未在 em_design_v2.md / sm_design.md 显式声明 Tier-0 例外 | （a）在 em_design_v2.md 新增 §"Tier-0 安全旁路服务"小节，列举允许 systemd 直管的服务清单（estop_voice / estop_hardware）；（b）在 CLAUDE.md "已知错误"段补"非 EM 启停进程"的 Tier-0 例外条件 |
+| **A-H2** | 缺 `estop_hardware_design.md` | §8.5 与 §4.3.2 多次引用 hardware E-Stop 通道（GPIO IRQ + UART），但此组件无独立设计文档；硬件 E-Stop 电路、断电保持、自检机制无技术归口 | 新增 `design/layer_07_hal_infra/estop_hardware_design.md`，覆盖：硬件链路、IRQ 路径、上电自检、与 SM `/sm/trigger_estop`（source=`hardware_estop`）的契约、失效安全（fail-safe）行为 |
+| **A-H3** | `keyword_id` 枚举的版本管理策略缺失 | VoiceEStop.srv 的 `keyword_id` 1–8 是与 KWS 模型耦合的硬编码合约。模型升级（新增"急救"等关键词）时，msg/srv 与 KWS 模型必须同步，但当前无版本号或兼容矩阵 | 在 `voice_interaction_subsystem.md` 与 sm_design.md §3.2 同步加入 `keyword_id_version` 字段（uint8，初值 1）；KWS 模型每次新增关键词时该版本号递增；SM 端只接受当前 SDK 已知版本 |
+| **A-H4** | `estop_voice_service` 自身可观测性缺位 | 该服务一旦异常（崩溃 / 高 CPU / 关键词识别延迟）将直接削弱整条语音急停链；当前无心跳、无 HDS 上报路径 | 要求 estop_voice_service 同样按 `Heartbeat.msg` 上报（即便它不归 EM 管，但 HDS 必须能看到它）；HDS 设计补充对 systemd 服务的健康观测路径 |
+
+**MEDIUM 项**：
+- M-A1：sm_design.md §1 模块边界表已有"SM ↔ Voice 子系统"行，但 voice 子系统反向引用未在 voice_interaction_subsystem.md 落实
+- M-A2：fota_design.md 升级流程未声明 systemd Tier-0 服务在 FOTA 期间的处置策略（是否随系统升级？升级期间 voice 急停链路是否仍然有效？）
+- M-A3：§8.5 仲裁优先级表中 "Gateway/APP" 与 "internal（HDS/EM）" 优先级孰高未给出仲裁依据，仅"先到先得"无法解释多源同时到达时的确定性
+
+**LOW 项**：
+- L-A1：§9 包结构里 `estop_handler.hpp` 未拆分 voice / hardware 分支处理，建议在实现期再评估是否拆为两文件
+- L-A2：综合建议文档化"E-Stop 路径"作为本仓库的 *关键路径* 标签，便于代码审查时识别
+
+---
+
+### 11.4 跨模块联动清单
+
+本次审查发现下列文档需配套更新（按优先级）：
+
+| 优先级 | 文档 | 待办 |
+|--------|------|------|
+| P0 | `design/layer_07_hal_infra/estop_hardware_design.md`（**新建**） | 硬件急停链路、自检、与 SM 契约（A-H2） |
+| P0 | `design/layer_06_middleware/em_design_v2.md` | 增补 Tier-0 安全旁路服务清单与例外说明（A-H1） |
+| P0 | `CLAUDE.md` | "已知错误"段补 Tier-0 例外条件（A-H1） |
+| P1 | `subsystem/voice_interaction_subsystem.md` | 反向引用 sm_design §3.2；同步 `keyword_id_version` 字段（A-H3 / M-A1） |
+| P1 | `design/layer_06_middleware/hds_design.md` | 增补 systemd 服务健康观测路径（A-H4） |
+| P2 | `design/layer_03_application/fota_design.md` | FOTA 期间 Tier-0 服务处置策略（M-A2） |
+
+---
+
+### 11.5 综合修复建议（按优先级排序）
+
+**HIGH（合入实现前必须完成，8 项）**：
+1. [S-H1] `estop_handler` 增加 `keyword_id` 二次白名单校验（→ §3.2 / §7 / 实现）
+2. [S-H2] 选定 ACL 强制机制（DDS Security 或 systemd socket）并在 §8.5 文档化
+3. [S-H3] §8.5 增补 Release 阶段多源处理规则
+4. [S-H4] 实现重复触发抑制 + KWS 误触率纳入 KPI（→ §4.3.2 / §10）
+5. [A-H1] em_design_v2.md + CLAUDE.md 补 Tier-0 例外
+6. [A-H2] 新建 estop_hardware_design.md
+7. [A-H3] 引入 `keyword_id_version` 字段并跨文档同步
+8. [A-H4] estop_voice_service 心跳与 HDS 观测路径
+
+**MEDIUM（建议在下一次设计 review 前闭环，6 项）**：
+- M-1：audit log 保留期与轮转策略
+- M-2：审计时间戳来源规则
+- M-3：KWS score 阈值职责划分
+- M-A1：voice 子系统反向引用
+- M-A2：FOTA 与 Tier-0 服务交互
+- M-A3：仲裁优先级补充确定性规则
+
+**LOW（不阻塞，可在实现期或下次重构合并）**：
+- L-1：补 `ERR_SM_INVALID_KEYWORD`
+- L-2：`detected_at` 字段命名一致性
+- L-A1：`estop_handler` 文件拆分
+- L-A2：标记 *关键路径* 标签
+
+---
+
+### 11.6 审查结论
+
+设计层面闭环，但**安全攻击面（S-H1/H2/H4）**与**进程治理边界（A-H1/H2）**两类高优先级问题构成合入门槛。建议：
+
+> 在 8 项 HIGH 修复完成、且新增 `estop_hardware_design.md` 落盘后，再进入实现阶段。MEDIUM 项可与实现并行推进。
+

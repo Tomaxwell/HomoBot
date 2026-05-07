@@ -1,3 +1,6 @@
+# sm_msgs/srv/TriggerEStop.srv
+# 触发急停（优先级固定 100，不可覆盖）
+
 string requester_node
 string reason
 ---

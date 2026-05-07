@@ -1,3 +1,6 @@
+# sm_msgs/msg/RobotState.msg
+# 机器人全局状态广播消息
+
 uint8 BOOTING            = 0
 uint8 STANDBY            = 1
 uint8 CHARGING           = 2

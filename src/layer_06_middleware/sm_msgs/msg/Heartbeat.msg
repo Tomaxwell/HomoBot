@@ -1,3 +1,6 @@
+# sm_msgs/msg/Heartbeat.msg
+# SM 模块心跳消息
+
 builtin_interfaces/Time stamp
 string node_name
 uint8 state

@@ -1,3 +1,6 @@
+# sm_msgs/srv/ReleaseEStop.srv
+# 解除急停（必须人工操作）
+
 string operator_id
 string reason
 ---
