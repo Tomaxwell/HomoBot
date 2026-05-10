@@ -1,5 +1,3 @@
----
-
 # Upper Body Control 模块设计
 
 ## 1. 模块概述与定位

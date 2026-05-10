@@ -45,22 +45,44 @@ EM 在端侧架构中的位置：
 
 ```mermaid
 flowchart TB
-    Gateway["Gateway
-云端/APP 通信（唯一云端出口）"]
-    SM["SM
-状态机决策（FSM 唯一权威）"]
-    TE["TE
-任务调度"]
-    EM["EM（本模块）
-无状态执行器（启动/监控/恢复）"]
-    HDS["HDS
-故障诊断与定级（唯一定级权威）"]
-    Systemd["systemd
-OS 级进程管理"]
-    HAL["HAL
-硬件抽象"]
+    subgraph External["外部 / 应用层"]
+        Cloud[("云端 / APP")]
+        Gateway["Gateway<br/>云端/APP 通信<br/>（唯一云端出口）"]
+    end
 
-    Gateway --> SM --> TE --> EM --> HDS --> Systemd --> HAL
+    subgraph Decision["决策权威层"]
+        SM["SM<br/>FSM 唯一权威<br/>状态机决策"]
+        HDS["HDS<br/>唯一定级权威<br/>故障诊断与定级"]
+        TE["TE<br/>任务调度"]
+    end
+
+    subgraph EMLayer["EM（本模块）"]
+        EM["Executive Manager<br/>无状态执行器<br/>启动 / 监控 / 恢复"]
+    end
+
+    subgraph SystemLayer["系统层"]
+        Systemd["systemd<br/>OS 级进程管理"]
+        Modules["业务模块<br/>(Perception / MC / ...)"]
+        HAL["HAL<br/>硬件抽象"]
+    end
+
+    Cloud <-.->|远程指令 / 事件| Gateway
+    Gateway -->|API| SM
+
+    SM -->|ApplyProcessSet<br/>编排指令| EM
+    SM -.->|/sm/robot_state| EM
+    EM -->|ExecutionProgress<br/>执行进度| SM
+
+    TE -->|任务级进程调度| EM
+
+    EM -->|MQTT: L3/L4 建议| HDS
+    HDS -->|MQTT: 批准/拒绝| EM
+    HDS -->|状态转换请求| SM
+
+    EM -->|dbus / API| Systemd
+    Systemd -->|启停| Modules
+    Modules -->|/em/process_heartbeat| EM
+    Modules --> HAL
 ```
 
 | 边界 | EM 负责 | 对方负责 | 红线 |
@@ -102,20 +124,23 @@ EM 本身**没有内部状态机**，但具备**执行上下文感知**能力：
 
 **该映射由 SM 持有并维护**，EM 不硬编码。SM 在状态转换时，通过 Service 调用 EM 的 `ApplyProcessSet`，传入目标进程组列表：
 
-```
-SM FSM 状态变更（如 STANDBY → ACTIVE_IDLE）
-    ↓
-SM 查询内部映射表：ACTIVE_IDLE → ["perception", "control", "ai"]
-    ↓
-SM 调用 EM::ApplyProcessSet(groups=["perception", "control", "ai"])
-    ↓
-EM 计算差异：需要启动 perception + control + ai
-    ↓
-EM Orchestrator 按 DAG 顺序执行
-    ↓
-EM 上报进度（STARTING → IDLE）
-    ↓
-SM 通过 GetProcessStatus 查询确认
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SM as SM (FSM)
+    participant EM as EM
+    participant Orch as Orchestrator
+
+    Note over SM: FSM 状态变更<br/>STANDBY → ACTIVE_IDLE
+    SM->>SM: 查询内部映射表<br/>ACTIVE_IDLE → [perception, control, ai]
+    SM->>+EM: ApplyProcessSet(groups=[...])
+    EM->>EM: 计算差异<br/>需启动 perception+control+ai
+    EM->>+Orch: 按 DAG 顺序执行
+    Orch-->>-EM: 编排完成
+    EM-->>-SM: success
+    Note over EM: 广播 ExecutionProgress<br/>STARTING → IDLE
+    SM->>+EM: GetProcessStatus
+    EM-->>-SM: ProcessStatus[] + Progress
 ```
 
 ---
@@ -327,29 +352,44 @@ builtin_interfaces/Duration duration
 
 ```mermaid
 flowchart TB
-    subgraph EMNode["executive_manager_node"]
-        subgraph MainNode["rclcpp::Node (主节点，普通用户权限)"]
-            Orchestrator["Orchestrator (编排引擎)"]
-            HealthMonitor["HealthMonitor (健康监控)"]
-            RecoveryEngine["RecoveryEngine (恢复引擎)"]
-            ProcessRegistry["ProcessRegistry (进程注册表)"]
-            ConfigManager["ConfigManager (配置管理)"]
-            TransitionQueue["TransitionQueue (编排队列)"]
+    subgraph EMProc["executive_manager_node 进程"]
+        subgraph MainExec["主 Executor（普通用户权限）"]
+            Orch["Orchestrator<br/>编排引擎"]
+            HM["HealthMonitor<br/>健康监控"]
+            RE["RecoveryEngine<br/>恢复引擎"]
+            PR["ProcessRegistry<br/>进程注册表"]
+            CM["ConfigManager<br/>配置管理"]
+            TQ["TransitionQueue<br/>编排队列"]
         end
 
-        subgraph EStop["EStopHandler (独立节点/线程)"]
-            EStopExec["独立 Executor（SingleThreadedExecutor）"]
-            EStopSub["/sm/robot_state 订阅"]
-            EStopPub["/em/estop_immediate Publisher"]
-            EStopUDS["Unix Domain Socket → em_daemon"]
-        end
-
-        subgraph Daemon["em_daemon (root 特权代理，最小化代码)"]
-            UDS["UDS Server"]
-            DBus["systemd dbus 调用"]
-            Kill["kill/send_signal"]
+        subgraph EStop["EStopHandler（独立 SingleThreadedExecutor）"]
+            ESH["EStopHandler"]
+            ESHSub["/sm/robot_state 订阅"]
+            ESHPub["/em/estop_immediate Publisher"]
         end
     end
+
+    subgraph DaemonProc["em_daemon 进程（root，&lt; 500 行）"]
+        UDS["UDS Server"]
+        DBus["systemd dbus 调用"]
+        Kill["kill / send_signal"]
+    end
+
+    Orch <-->|读写| PR
+    HM -->|读写| PR
+    RE -->|读| PR
+    Orch -->|入队 / 出队| TQ
+    Orch -->|加载| CM
+    HM -->|心跳超时| RE
+    RE -->|重启请求| Orch
+
+    ESH -.->|estop_active 原子标志| Orch
+    ESH --> ESHSub
+    ESH --> ESHPub
+    ESH -->|UDS 命令| UDS
+    Orch -->|UDS 命令| UDS
+    UDS --> DBus
+    UDS --> Kill
 ```
 
 ### 5.2 关键组件
@@ -431,124 +471,175 @@ flowchart TB
 
 ### 6.1 系统冷启动流程
 
-```
-systemd 开机
-    ↓
-systemd 拉起 em_daemon（root）和 executive_manager_node（普通用户）
-    ↓
-EM 加载 /opt/striding/em/config.yaml（校验签名 + DAG 无环）
-    ↓
-EM 进入 IDLE，等待 SM 指令
-    ↓
-SM 启动完成（BOOTING 阶段），调用 EM::ApplyProcessSet
-        groups_to_start: ["infra", "middleware", "ops"]
-    ↓
-EM Orchestrator 按 DAG 启动 infra → middleware → ops
-    ↓
-所有就绪探针通过
-    ↓
-SM 广播 FSM: BOOTING → STANDBY
-    ↓
-SM 调用 EM::ApplyProcessSet（如需要 perception + control）
-        groups_to_start: ["perception", "control", "ai"]
-    ↓
-EM 编排启动 perception → control → ai
-    ↓
-全部就绪，冷启动目标 < 60s
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Sysd as systemd
+    participant Daemon as em_daemon (root)
+    participant EM as EM Node (普通用户)
+    participant Orch as Orchestrator
+    participant SM
+
+    Sysd->>Daemon: 拉起（root）
+    Sysd->>EM: 拉起（普通用户）
+    EM->>EM: 加载 /opt/striding/em/config.yaml<br/>(签名校验 + DAG 无环)
+    Note over EM: 进入 IDLE，等待 SM 指令
+
+    Note over SM: BOOTING 阶段启动完成
+    SM->>+EM: ApplyProcessSet<br/>(infra, middleware, ops)
+    EM->>+Orch: 按 DAG 启动
+    Orch->>Daemon: 启动 infra 组
+    Orch->>Daemon: 启动 middleware 组
+    Orch->>Daemon: 启动 ops 组
+    Daemon-->>Orch: 就绪探针通过
+    Orch-->>-EM: 完成
+    EM-->>-SM: success
+
+    Note over SM: 广播 BOOTING → STANDBY
+    SM->>+EM: ApplyProcessSet<br/>(perception, control, ai)
+    EM->>+Orch: 按 DAG 启动业务组
+    Orch->>Daemon: 启停命令
+    Daemon-->>Orch: 就绪
+    Orch-->>-EM: 完成
+    EM-->>-SM: success
+
+    Note over Sysd,SM: 冷启动目标 < 60s
 ```
 
 ### 6.2 SM 状态变更 → EM 执行流程
 
-```
-SM FSM 状态变更（如 STANDBY → ACTIVE_IDLE）
-    ↓
-SM 查询内部映射表：ACTIVE_IDLE → ["perception", "control", "ai"]
-    ↓
-SM 调用 EM::ApplyProcessSet
-        groups_to_start: ["perception", "control", "ai"]
-        reason: "Enter ACTIVE_IDLE"
-        requester_node: "state_manager"
-    ↓
-EM 计算差异：需要启动 perception + control + ai
-    ↓
-EM Orchestrator 按 DAG 顺序执行
-        1. 启动 perception 组（并行启动 VSLAM / Lidar-SLAM / MapManager）
-        2. perception 就绪后启动 control 组
-        3. control 就绪后启动 ai 组
-    ↓
-所有就绪探针通过
-    ↓
-EM 上报 ExecutionProgress: IDLE
-    ↓
-SM 通过 GetProcessStatus 查询确认
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SM
+    participant EM
+    participant Orch as Orchestrator
+    participant Per as perception 组
+    participant Ctl as control 组
+    participant AI as ai 组
+
+    Note over SM: STANDBY → ACTIVE_IDLE
+    SM->>SM: 映射表 → [perception, control, ai]
+    SM->>+EM: ApplyProcessSet<br/>reason="Enter ACTIVE_IDLE"<br/>requester_node="state_manager"
+    EM->>EM: 计算差异
+
+    EM->>+Orch: 按 DAG 顺序执行
+    par 并行启动 perception 组
+        Orch->>Per: 启动 VSLAM
+        Orch->>Per: 启动 Lidar-SLAM
+        Orch->>Per: 启动 MapManager
+    end
+    Per-->>Orch: 就绪探针通过
+
+    Orch->>+Ctl: 启动 control 组
+    Ctl-->>-Orch: 就绪
+
+    Orch->>+AI: 启动 ai 组
+    AI-->>-Orch: 就绪
+    Orch-->>-EM: 编排完成
+
+    EM-->>-SM: ExecutionProgress: IDLE
+    SM->>+EM: GetProcessStatus
+    EM-->>-SM: 状态确认
 ```
 
 ### 6.3 故障恢复流程（L1→L2→L3/L4 上报）
 
-```
-HealthMonitor 检测到 PnC 心跳超时
-    ↓
-通知 RecoveryEngine
-    ↓
-L1: RecoveryEngine 重启 PnC（原地重启）
-    ↓
-PnC 重启成功 → 恢复正常
-    ↓
-（若 L1 失败，5min 内 3 次）
-L2: RecoveryEngine 重启整个 control 组
-    ↓
-control 组重启成功 → 恢复正常
-    ↓
-（若 L2 失败）
-L3: RecoveryEngine 执行以下动作：
-        1. 停止 perception + control + ai（P2/P3 进程）
-        2. 保留 infra + middleware + ops 运行
-        3. 通过 MQTT 上报 HDS Master：
-          "em/event/l3_suggestion"
-          { "reason": "control group restart exhausted",
-            "stopped_groups": ["perception", "control", "ai"] }
-    ↓
-HDS Master 收到建议，进行故障定级
-    ↓
-HDS 决定请求 SM 进入 DEGRADED（或保持当前状态）
-    ↓
-SM 批准 DEGRADED，调用 EM::ApplyProcessSet 确认进程集合
-    ↓
-EM 执行（如已停止则无需操作）
+```mermaid
+flowchart TB
+    Start([HealthMonitor 检测到<br/>PnC 心跳超时]) --> Notify[通知 RecoveryEngine]
+
+    Notify --> L1Check{L1: 重启 PnC<br/>5min 内 ≤ 3 次?}
+    L1Check -->|执行| L1Action[原地重启 PnC]
+    L1Action --> L1Result{重启成功?}
+    L1Result -->|是| OK1([恢复正常])
+    L1Result -->|否或超限| L2Check
+
+    L2Check{L2: 重启 control 组<br/>10min 内 ≤ 2 次?} -->|执行| L2Action[重启整个 control 组]
+    L2Action --> L2Result{重启成功?}
+    L2Result -->|是| OK2([恢复正常])
+    L2Result -->|否或超限| L3Block
+
+    subgraph L3Block["L3: 系统降级建议"]
+        L3a[停止 perception + control + ai<br/>P2/P3 进程]
+        L3b[保留 infra + middleware + ops 运行]
+        L3c["MQTT 上报 HDS Master<br/>em/event/l3_suggestion<br/>{ reason, stopped_groups }"]
+        L3a --> L3b --> L3c
+    end
+
+    L3c --> HDSDecide{HDS Master<br/>故障定级}
+    HDSDecide -->|批准降级| ReqDeg[HDS 请求 SM<br/>进入 DEGRADED]
+    HDSDecide -->|保持当前状态| Wait([维持现状])
+
+    ReqDeg --> SMApply[SM 调用<br/>EM::ApplyProcessSet 确认]
+    SMApply --> Done([进入 DEGRADED])
+
+    %% L4 路径
+    Notify -.->|P0-Critical 不可恢复| L4[L4: 紧急停止建议]
+    L4 --> L4a[立即停止运动进程]
+    L4a --> L4b["MQTT 上报<br/>em/event/l4_suggestion"]
+    L4b --> HDSL4{HDS 定级}
+    HDSL4 -->|批准 E-Stop| ReqEStop[HDS 请求 SM<br/>触发 ACTIVE_E_STOP]
+    ReqEStop --> EStopFlow([进入 E-Stop 流程<br/>见 6.4])
+
+    classDef l1 fill:#e8f5e9
+    classDef l2 fill:#fff3e0
+    classDef l3 fill:#ffe0b2
+    classDef l4 fill:#ffcdd2
+    class L1Check,L1Action l1
+    class L2Check,L2Action l2
+    class L3a,L3b,L3c l3
+    class L4,L4a,L4b l4
 ```
 
 ### 6.4 E-Stop 触发流程（安全关键路径）
 
-```
-E-Stop 触发（硬件按钮 / HDS / SM）
-    ↓
-SM 立即进入 ACTIVE_E_STOP（priority=100，不可被覆盖）
-    ↓
-EStopHandler（独立 Executor）订阅到状态变更
-        ⚠️ 独立线程，延迟目标 < 10ms
-    ↓
-EStopHandler 执行：
-        1. estop_active = true（原子标志位）
-        2. 向 Orchestrator 发送"取消所有编排"
-        3. 广播 /em/estop_immediate（0 延迟）
-        4. MC 收到 estop_immediate，进入硬件级安全模式
-        5. 等待 500ms（MC 安全模式确认超时）
-        6. em_daemon 停止运动相关进程：
-          - control 组：SIGTERM → SIGKILL（500ms 超时，硬编码）
-          - perception 组：SIGTERM → SIGKILL（5s 超时）
-          - ai 组：SIGTERM → SIGKILL（5s 超时）
-    ↓
-保留运行：infra + middleware + ops
-    ↓
-EM 通过 MQTT 上报 HDS Master：E-Stop 已执行
-    ↓
-等待人工解除 E-Stop（Gateway → SM）
-    ↓
-EM 通过 AcknowledgeEstopRelease Service 向 SM 查询 operator_id 有效性
-    ↓
-确认有效后，estop_active = false
-    ↓
-SM 调用 EM::ApplyProcessSet 恢复 perception + control
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Trig as 触发源<br/>(硬件 / HDS / SM)
+    participant SM
+    participant ESH as EStopHandler<br/>(独立 Executor)
+    participant Orch as Orchestrator
+    participant MC as MC<br/>(Motion Control)
+    participant Daemon as em_daemon
+    participant HDS
+    participant Op as 操作员<br/>(Gateway → SM)
+
+    Trig->>SM: E-Stop 触发
+    SM->>SM: 进入 ACTIVE_E_STOP<br/>(priority=100, 不可覆盖)
+    SM-->>ESH: /sm/robot_state 状态变更
+
+    rect rgb(255, 235, 235)
+        Note over ESH: ⚠️ 延迟目标 < 10ms<br/>独立线程，与主 Executor 隔离
+        ESH->>ESH: estop_active = true (atomic)
+        ESH->>Orch: 取消所有正在执行的编排
+        ESH->>+MC: 广播 /em/estop_immediate (0 延迟)
+        MC->>MC: 进入硬件级安全模式
+        MC-->>-ESH: 安全模式确认（≤ 500ms）
+    end
+
+    ESH->>+Daemon: 通过 UDS 通知停止运动相关进程
+    Note over Daemon: SIGKILL 超时硬编码
+    Daemon->>Daemon: control 组：SIGTERM<br/>500ms 后 SIGKILL
+    Daemon->>Daemon: perception 组：SIGTERM<br/>5s 后 SIGKILL
+    Daemon->>Daemon: ai 组：SIGTERM<br/>5s 后 SIGKILL
+    Daemon-->>-ESH: 完成
+
+    Note over ESH: 保留 infra + middleware + ops 运行
+    ESH->>HDS: MQTT 上报：E-Stop 已执行
+
+    rect rgb(235, 245, 255)
+        Note over Op,SM: 等待人工解除
+        Op->>SM: 解除请求<br/>(operator_id)
+        ESH->>+SM: AcknowledgeEstopRelease<br/>(operator_id)
+        SM->>SM: 校验 operator_id 有效性
+        SM-->>-ESH: confirmed = true
+        ESH->>ESH: estop_active = false
+    end
+
+    SM->>+EM: ApplyProcessSet<br/>(恢复 perception + control)
+    EM-->>-SM: 恢复完成
 ```
 
 ---

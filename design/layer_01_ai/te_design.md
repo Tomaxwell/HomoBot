@@ -1,5 +1,3 @@
----
-
 # Task Engine 模块设计
 
 ## 1. 模块概述与定位
@@ -72,42 +70,23 @@ TE 维护两层状态机：**任务级状态机**（每个任务独立）和 **�
 
 #### 3.1.2 状态转换图
 
-```
-                    ┌─────────────────────────────────────────┐
-                    │                                         │
-              ┌─────┴─────┐  preconditions_met    ┌───────────┴───┐
-   create────►│  CREATED  │──────────────────────►│   SCHEDULED   │
-              └───────────┘                       └───────┬───────┘
-                    │                                     │
-                    │ invalid_params                      │ dependencies_ready
-                    ▼                                     ▼
-              ┌───────────┐                       ┌───────────┐
-              │  FAILED   │◄──────────────────────┤ PREPARING │
-              └─────┬─────┘   prepare_timeout     └─────┬─────┘
-                    │                                   │
-                    │                                   │ sm_ready
-                    │                                   ▼
-                    │                             ┌───────────┐
-                    │         pause               │  RUNNING  │
-                    │◄────────────────────────────┤           │
-                    │                             └─────┬─────┘
-                    │                                   │
-                    │         resume                    │ execute_complete
-                    ├───────────────────────────────────┘
-                    │
-                    │    cancel_request    ┌───────────┐
-                    ├─────────────────────►│CANCELLING │
-                    │                      └─────┬─────┘
-                    │                            │ cleanup_done
-                    │                            ▼
-                    │                      ┌───────────┐
-                    └──────────────────────┤ CANCELLED │
-                                           └───────────┘
-
-              RUNNING ──execute_error──► FAILED
-              RUNNING ──execute_success──► COMPLETED
-              PREPARING ──sm_reject──► FAILED
-              SCHEDULED ──timeout──► FAILED
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED : create
+    CREATED --> SCHEDULED : preconditions_met
+    CREATED --> FAILED : invalid_params
+    SCHEDULED --> PREPARING : dependencies_ready
+    SCHEDULED --> FAILED : timeout
+    PREPARING --> RUNNING : sm_ready
+    PREPARING --> FAILED : prepare_timeout
+    RUNNING --> PAUSED : pause
+    PAUSED --> RUNNING : resume
+    RUNNING --> CANCELLING : cancel_request
+    PAUSED --> CANCELLING : cancel_request
+    CANCELLING --> CANCELLED : cleanup_done
+    CANCELLING --> FAILED : cleanup_error
+    RUNNING --> COMPLETED : execute_success
+    RUNNING --> FAILED : execute_error
 ```
 
 #### 3.1.3 状态转换表
@@ -495,55 +474,31 @@ uint32 total_subtask_count         # 总子任务数
 
 ### 5.1 节点结构
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        TaskEngineNode                                │
-│                                                                      │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐   │
-│  │  Task Scheduler │   │  Task Executor  │   │  State Manager  │   │
-│  │  (任务调度器)   │   │  (任务执行器)   │   │  Client (SM)    │   │
-│  │                 │   │                 │   │                 │   │
-│  │  - 优先级队列   │   │  - 子任务分发   │   │  - 状态转换请求 │   │
-│  │  - 依赖解析     │   │  - Action 调用  │   │  - 运动许可查询 │   │
-│  │  - 调度策略     │   │  - 超时监控     │   │  - 状态缓存     │   │
-│  └────────┬────────┘   └────────┬────────┘   └─────────────────┘   │
-│           │                     │                                     │
-│           └──────────┬──────────┘                                     │
-│                      ▼                                               │
-│  ┌─────────────────────────────────────────┐                         │
-│  │         Task Lifecycle Manager          │                         │
-│  │    (状态机引擎 + 持久化 + 事件发布)     │                         │
-│  └─────────────────────────────────────────┘                         │
-│                                                                      │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐   │
-│  │  Action Client  │   │  Service Client │   │  Service Server │   │
-│  │  Pool           │   │  Pool           │   │  (TE 对外接口)  │   │
-│  │                 │   │                 │   │                 │   │
-│  │  - MP Action    │   │  - SM Services  │   │  - SubmitTask   │   │
-│  │  - PnC Action   │   │  - Agent Srv    │   │  - CancelTask   │   │
-│  │  - Agent Action │   │  - HDS Srv      │   │  - GetStatus    │   │
-│  └─────────────────┘   └─────────────────┘   └─────────────────┘   │
-│                                                                      │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐   │
-│  │  E-Stop Handler │   │  Heartbeat      │   │  Config Manager │   │
-│  │  (独立回调组)   │   │  Timer (1Hz)    │   │  (参数管理)     │   │
-│  └─────────────────┘   └─────────────────┘   └─────────────────┘   │
-│                                                                      │
-│  ┌─────────────────────────────────────────┐                         │
-│  │  Task Data Tagger                       │                         │
-│  │  (任务数据标签器，供 DR 数据录制)       │                         │
-│  │                                         │                         │
-│  │  - 为每个任务附加语义标签（任务类型、    │                         │
-│  │    执行结果、环境上下文、Agent决策质量） │                         │
-│  │  - 生成 TaskDataTag 消息，发布到 DR     │                         │
-│  │  - 支持 VLA 训练数据的任务级元数据      │                         │
-│  └─────────────────────────────────────────┘                         │
-│                                                                      │
-│  ┌─────────────────────────────────────────┐                         │
-│  │  Composite Task Parser                  │                         │
-│  │  (JSON/YAML 复合任务描述解析器)         │                         │
-│  └─────────────────────────────────────────┘                         │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph TaskEngineNode["TaskEngineNode"]
+        subgraph CoreLayer["核心层"]
+            TS["Task Scheduler<br/>任务调度器<br/>- 优先级队列<br/>- 依赖解析<br/>- 调度策略"]
+            TE["Task Executor<br/>任务执行器<br/>- 子任务分发<br/>- Action 调用<br/>- 超时监控"]
+            SMC["State Manager Client<br/>- 状态转换请求<br/>- 运动许可查询<br/>- 状态缓存"]
+        end
+        TLM["Task Lifecycle Manager<br/>状态机引擎 + 持久化 + 事件发布"]
+        subgraph PoolLayer["Client 层"]
+            ACP["Action Client Pool<br/>- MP Action<br/>- PnC Action<br/>- Agent Action"]
+            SCP["Service Client Pool<br/>- SM Services<br/>- Agent Srv<br/>- HDS Srv"]
+            SS["Service Server<br/>TE 对外接口<br/>- SubmitTask<br/>- CancelTask<br/>- GetStatus"]
+        end
+        subgraph SupportLayer["支撑层"]
+            ESH["E-Stop Handler<br/>独立回调组"]
+            HB["Heartbeat Timer<br/>1Hz"]
+            CFG["Config Manager<br/>参数管理"]
+        end
+        TDT["Task Data Tagger<br/>任务数据标签器（供 DR 录制）"]
+        CTP["Composite Task Parser<br/>JSON/YAML 复合任务描述解析器"]
+    end
+    TS --> TLM
+    TE --> TLM
+    SMC --> TLM
 ```
 
 ### 5.2 关键组件
@@ -754,66 +709,46 @@ Gateway/Agent 调用 /te/execute_composite (Action)
 
 #### 正常运动任务执行时序
 
-```
-  Gateway      TE          SM          MP          MC
-    │           │           │           │           │
-    │ submit_task          │           │           │
-    ├──────────►│          │           │           │
-    │           │          │           │           │
-    │           │ request_transition    │           │
-    │           │ (ACTIVE_BUSY, pri=40) │           │
-    │           │──────────►│           │           │
-    │           │ accepted  │           │           │
-    │           │◄──────────│           │           │
-    │           │          │           │           │
-    │           │ is_motion_allowed     │           │
-    │           │──────────►│           │           │
-    │           │ allowed   │           │           │
-    │           │◄──────────│           │           │
-    │           │          │           │           │
-    │           │ play_motion (Action) │           │
-    │           │──────────►│           │           │
-    │           │          │           │           │
-    │           │◄────Feedback──────────│           │
-    │           │ (progress)            │           │
-    │           │          │           │           │
-    │  task_state          │           │           │
-    │◄──────────┤          │           │           │
-    │           │          │           │           │
-    │           │◄────Result────────────│           │
-    │           │ (success)             │           │
-    │           │          │           │           │
-    │           │ request_transition    │           │
-    │           │ (ACTIVE_IDLE, pri=40) │           │
-    │           │──────────►│           │           │
-    │           │          │           │           │
-    │  task_state(COMPLETED)            │           │
-    │◄──────────┤          │           │           │
-    │           │          │           │           │
+```mermaid
+sequenceDiagram
+    participant Gateway
+    participant TE
+    participant SM
+    participant MP
+
+    Gateway->>TE: submit_task
+    TE->>SM: request_transition<br/>(ACTIVE_BUSY, pri=40)
+    SM-->>TE: accepted
+    TE->>SM: is_motion_allowed
+    SM-->>TE: allowed
+    TE->>MP: play_motion (Action)
+    loop 执行中
+        MP-->>TE: Feedback (progress)
+        TE-->>Gateway: task_state
+    end
+    MP-->>TE: Result (success)
+    TE->>SM: request_transition<br/>(ACTIVE_IDLE, pri=40)
+    TE-->>Gateway: task_state (COMPLETED)
 ```
 
 #### E-Stop 触发时序
 
-```
-  Hardware     SM          TE          MP          MC
-    │           │           │           │           │
-    │ trigger_estop        │           │           │
-    ├──────────►│          │           │           │
-    │           │          │           │           │
-    │           │ robot_state=ACTIVE_E_STOP        │
-    │           │──────────►│           │           │
-    │           │          │           │           │
-    │           │          │ cancel_goal()         │
-    │           │          │──────────►│           │
-    │           │          │           │ stop      │
-    │           │          │           │──────────►│
-    │           │          │           │           │
-    │           │          │◄──Result──│           │
-    │           │          │ (cancelled)           │
-    │           │          │           │           │
-    │           │          │ task_state=CANCELLED  │
-    │           │          │──────────►│           │
-    │           │          │ (Gateway) │           │
+```mermaid
+sequenceDiagram
+    participant Hardware
+    participant SM
+    participant TE
+    participant MP
+    participant MC
+
+    Hardware->>SM: trigger_estop
+    SM->>TE: robot_state=ACTIVE_E_STOP
+    TE->>MP: cancel_goal()
+    MP->>MC: stop
+    MC-->>MP: 
+    MP-->>TE: Result (cancelled)
+    TE->>TE: task_state=CANCELLED
+    TE-->>Gateway: task_state (CANCELLED)
 ```
 
 ---

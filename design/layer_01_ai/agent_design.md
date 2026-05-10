@@ -1,5 +1,3 @@
----
-
 # Agent 模块设计
 
 ## 1. 模块概述与定位
@@ -17,7 +15,7 @@ Agent 参考开源项目 [RoboClaw](https://github.com/MINT-SJTU/RoboClaw) 的 A
 4. **技能调用（Skills）**：通过预定义的技能工具集（perceive、dispatch_task、query_state 等）与系统交互
 5. **记忆管理**：维护短期对话上下文和长期任务记忆
 6. **任务生成**：向 TE 提交任务计划，监控执行进度，处理失败重规划
-7. **用户交互**：必要时向用户确认、追问或报告执行结果
+7. **用户交互**：必要时向用户确认、追问或报告执行结果.
 
 **与相邻模块的边界**：
 
@@ -55,52 +53,59 @@ Agent 参考开源项目 [RoboClaw](https://github.com/MINT-SJTU/RoboClaw) 的 A
 
 ### 3.1 Agent 核心循环（参考 RoboClaw AgentLoop）
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         AgentNode (ROS2)                                │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                     Agent Loop (异步)                           │   │
-│  │                                                                 │   │
-│  │  1. Receive: 接收消息（NL指令 / 感知更新 / 任务反馈）            │   │
-│  │  2. Context Build: 构建上下文（历史 + 记忆 + 技能 + 环境状态）   │   │
-│  │  3. LLM Inference: 调用 LLM（本地/云端）→ 生成响应/计划         │   │
-│  │  4. Tool Execution: 解析并执行工具调用                          │   │
-│  │  5. Response: 发送响应给用户 / 提交任务给 TE                    │   │
-│  │                                                                 │   │
-│  │  max_iterations = 20（防止无限循环）                            │   │
-│  │  context_window = 128k tokens                                   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐   │
-│  │  Skill Registry │   │  Memory Manager │   │  Context Builder│   │
-│  │  (技能注册表)   │   │  (记忆管理)     │   │  (上下文构建)   │   │
-│  │                 │   │                 │   │                 │   │
-│  │ - perceive      │   │ - 短期对话记忆  │   │ - 系统提示词    │   │
-│  │ - query_state   │   │ - 长期任务记忆  │   │ - 自动归档      │   │
-│  │ - dispatch_task │   │ - 自动归档      │   │ - 工具定义      │   │
-│  │ - cancel_task   │   │                 │   │ - 环境快照      │   │
-│  │ - ask_user      │   │                 │   │                 │   │
-│  └─────────────────┘   └─────────────────┘   └─────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │              Confidence Monitor (决策置信度监控)                 │   │
-│  │                                                                 │   │
-│  │  - 监控 LLM 推理置信度（token 概率、一致性检查）                 │   │
-│  │  - 低置信度时标记数据质量标签（供 DR / DataQualityFilter）       │   │
-│  │  - 生成决策质量报告，嵌入 TaskProposal 元数据                    │   │
-│  │                                                                 │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   ROS2 Interface Layer                          │   │
-│  │                                                                 │   │
-│  │  Subscribers: /gateway/user_cmd, /perception/fusion_result, ...│   │
-│  │  Publishers: /agent/agent_response, /agent/task_proposal, ...  │   │
-│  │  Service Server: /agent/query_status                           │   │
-│  │  Action Server: /agent/execute_interaction                     │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph AgentNode["AgentNode (ROS2)"]
+        subgraph AgentLoop["Agent Loop (异步)"]
+            direction TB
+            Receive["1. Receive
+接收消息"]
+            CBuild["2. Context Build
+构建上下文"]
+            LLM["3. LLM Inference
+调用 LLM"]
+            ToolExec["4. Tool Execution
+解析并执行工具调用"]
+            Response["5. Response
+发送响应/提交任务"]
+            Receive --> CBuild --> LLM --> ToolExec --> Response
+        end
+
+        SR["Skill Registry
+技能注册表
+- perceive
+- query_state
+- dispatch_task
+- cancel_task
+- ask_user"]
+        MM["Memory Manager
+记忆管理
+- 短期对话记忆
+- 长期任务记忆
+- 自动归档"]
+        CB["Context Builder
+上下文构建
+- 系统提示词
+- 自动归档
+- 工具定义
+- 环境快照"]
+        CM["Confidence Monitor
+决策置信度监控
+- token 概率
+- 一致性检查
+- 低置信度标记"]
+        ROS2["ROS2 Interface Layer
+- Subscribers
+- Publishers
+- Service Server
+- Action Server"]
+    end
+
+    AgentLoop --> SR
+    AgentLoop --> MM
+    AgentLoop --> CB
+    AgentLoop --> CM
+    AgentLoop --> ROS2
 ```
 
 ### 3.2 核心组件
@@ -160,16 +165,20 @@ Agent 通过**技能（Skills）**与端侧系统交互。每个技能是一个�
 
 每次 LLM 调用前，构建完整的上下文消息：
 
-```
-System Prompt（角色定义 + 安全约束 + 可用技能列表）
-  ↓
-Long-term Memory（相关的历史任务/偏好）
-  ↓
-Session History（当前对话的最近 N 轮）
-  ↓
-Environment Snapshot（当前机器人状态、感知结果摘要）
-  ↓
-Current Message（用户当前指令）
+```mermaid
+flowchart TD
+    SP["System Prompt
+角色定义 + 安全约束 + 可用技能列表"]
+    LM["Long-term Memory
+相关的历史任务/偏好"]
+    SH["Session History
+当前对话的最近 N 轮"]
+    ES["Environment Snapshot
+当前机器人状态、感知结果摘要"]
+    CM["Current Message
+用户当前指令"]
+
+    SP --> LM --> SH --> ES --> CM
 ```
 
 **环境快照（Environment Snapshot）**包含：
@@ -384,45 +393,47 @@ string current_skill             # 当前调用的技能
 
 ### 5.1 节点架构
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           AgentNode                                     │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                        Agent Core                                │   │
-│  │                                                                  │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │   │
-│  │  │  Message    │  │  Context    │  │  LLM Provider           │  │   │
-│  │  │  Router     │──►│  Builder    │──►│ (本地/云端)             │  │   │
-│  │  │             │  │             │  │                         │  │   │
-│  │  │ - 分类消息  │  │ - 拼接上下文│  │ - 本地 LLM（端侧 NPU） │  │   │
-│  │  │ - 路由处理  │  │ - 注入技能  │  │ - 云端 API（备用）      │  │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │   │
-│  │           │                                    │                │   │
-│  │           ▼                                    ▼                │   │
-│  │  ┌──────────────────────────────────────────────────────────┐  │   │
-│  │  │                    Tool Executor                         │  │   │
-│  │  │  - 解析 LLM 输出的工具调用                               │  │   │
-│  │  │  - 调用 Skill Registry 中对应的技能                      │  │   │
-│  │  │  - 收集工具执行结果                                      │  │   │
-│  │  │  - 返回给 LLM 继续推理                                   │  │   │
-│  │  └──────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐   │
-│  │  Skill Registry │   │  Memory Manager │   │  Config Manager │   │
-│  │  (技能注册表)   │   │  (记忆管理)     │   │  (参数管理)     │   │
-│  └─────────────────┘   └─────────────────┘   └─────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   ROS2 Interface Layer                          │   │
-│  │                                                                  │   │
-│  │  Subscribers: user_cmd, fusion_result, robot_state, ...        │   │
-│  │  Publishers: agent_response, task_proposal, agent_state, ...   │   │
-│  │  Service Server: query_status, clear_memory                    │   │
-│  │  Action Server: execute_interaction                            │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph AgentNode["AgentNode"]
+        subgraph AgentCore["Agent Core"]
+            direction LR
+            MR["Message Router
+消息路由器
+- 分类消息
+- 路由处理"]
+            CB["Context Builder
+上下文构建器
+- 拼接上下文
+- 注入技能"]
+            LLMP["LLM Provider
+本地/云端"]
+            TE["Tool Executor
+工具执行器
+- 解析工具调用
+- 调用技能
+- 收集结果"]
+            MR --> CB --> LLMP
+            LLMP --> TE
+            TE --> LLMP
+        end
+
+        SR["Skill Registry
+技能注册表"]
+        MM["Memory Manager
+记忆管理"]
+        CFG["Config Manager
+参数管理"]
+        ROS2["ROS2 Interface Layer
+- Subscribers
+- Publishers
+- Service/Action"]
+    end
+
+    AgentCore --> SR
+    AgentCore --> MM
+    AgentCore --> CFG
+    AgentCore --> ROS2
 ```
 
 ### 5.2 关键设计决策
@@ -437,57 +448,63 @@ string current_skill             # 当前调用的技能
 
 #### 5.3.1 用户指令处理流程
 
-```
-Gateway 发布 /gateway/user_command ("帮我把红色杯子放到桌上")
-  → Agent 接收消息
-  → Message Router 分类：用户指令 → 进入 Agent Loop
-  → Context Builder 构建上下文：
-      - 系统提示词（角色、约束、可用技能）
-      - 长期记忆（用户偏好、房间布局）
-      - 会话历史（最近 10 轮）
-      - 环境快照（当前状态、位置、最近感知）
-  → LLM 推理（第 1 轮）：
-      - LLM 决定调用 perceive 技能
-  → Tool Executor 执行 perceive：
-      - 调用 Perception Service 查询红色杯子位置
-      - 返回杯子 3D 坐标
-  → LLM 推理（第 2 轮）：
-      - LLM 决定调用 dispatch_task 技能
-      - 生成任务计划：
-        1. 导航到桌子旁（TE_TYPE_NAVIGATION）
-        2. 抓取杯子（TE_TYPE_MOTION）
-        3. 放到桌上（TE_TYPE_MOTION）
-  → Tool Executor 执行 dispatch_task：
-      - 发布 /agent/task_proposal（复合任务）
-      - TE 接收并调度执行
-  → LLM 推理（第 3 轮）：
-      - LLM 生成自然语言响应："好的，我这就去把红色杯子放到桌上"
-  → 发布 /agent/agent_response
+```mermaid
+flowchart TD
+    A["Gateway 发布 /gateway/user_command
+'帮我把红色杯子放到桌上'"] --> B["Agent 接收消息"]
+    B --> C["Message Router 分类
+用户指令 → 进入 Agent Loop"]
+    C --> D["Context Builder 构建上下文
+- 系统提示词
+- 长期记忆
+- 会话历史
+- 环境快照"]
+    D --> E["LLM 推理（第 1 轮）
+决定调用 perceive 技能"]
+    E --> F["Tool Executor 执行 perceive
+调用 Perception Service
+查询红色杯子位置"]
+    F --> G["LLM 推理（第 2 轮）
+决定调用 dispatch_task 技能"]
+    G --> H["Tool Executor 执行 dispatch_task
+发布 /agent/task_proposal
+TE 接收并调度执行"]
+    H --> I["LLM 推理（第 3 轮）
+生成自然语言响应"]
+    I --> J["发布 /agent/agent_response
+'好的，我这就去把红色杯子放到桌上'"]
 ```
 
 #### 5.3.2 任务执行监控流程
 
-```
-TE 开始执行 Agent 提交的任务
-  → Agent 订阅 /te/task_state
-  → 任务进度更新时：
-      - 如果进度正常 → 不打扰用户
-      - 如果需要用户确认 → 调用 ask_user 技能
-      - 如果任务失败 → LLM 重新规划（重试/换方案/报告用户）
-  → 任务完成：
-      - 发布 /agent/agent_response（"已经放好了"）
-      - 更新长期记忆（任务成功模式）
+```mermaid
+flowchart TD
+    A["TE 开始执行 Agent 提交的任务"] --> B["Agent 订阅 /te/task_state"]
+    B --> C{"任务进度更新"}
+    C -->|进度正常| D["不打扰用户"]
+    C -->|需要用户确认| E["调用 ask_user 技能"]
+    C -->|任务失败| F["LLM 重新规划
+重试/换方案/报告用户"]
+    D --> G["任务完成"]
+    E --> G
+    F --> G
+    G --> H["发布 /agent/agent_response
+'已经放好了'"]
+    G --> I["更新长期记忆
+任务成功模式"]
 ```
 
 #### 5.3.3 E-Stop / FAULT 时的 Agent 行为
 
-```
-SM 状态变为 ACTIVE_E_STOP 或 FAULT
-  → Agent 订阅收到
-  → 立即中止当前 Agent Loop（如果有正在进行的推理）
-  → 停止提交新任务
-  → 向用户发送响应："检测到急停/故障，已停止当前操作"
-  → 等待状态恢复后，询问用户是否继续
+```mermaid
+flowchart TD
+    A["SM 状态变为 ACTIVE_E_STOP 或 FAULT"] --> B["Agent 订阅收到"]
+    B --> C["立即中止当前 Agent Loop"]
+    C --> D["停止提交新任务"]
+    D --> E["向用户发送响应
+'检测到急停/故障，已停止当前操作'"]
+    E --> F["等待状态恢复后
+询问用户是否继续"]
 ```
 
 ---
