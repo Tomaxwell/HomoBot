@@ -145,7 +145,7 @@
 
 选用独立音频 DSP 的核心原因：RK3588 内置音频接口（I2S/PDM）不含硬件 AEC，AEC 若在 SoC 上做软件实现，调度抖动会导致 reference 信号延迟漂移（通常 >10ms），严重影响消除效果。
 
-| 候选 | 核心 | AEC/BF | KWS_RT 支持 | 单价（¥）| 推荐 |
+| 候选 | 核心 | AEC/BF | KWS 支持 | 单价（¥）| 推荐 |
 |------|------|--------|-------------|---------|------|
 | **XMOS XU316-1024** | xCORE.AI × 16，1024 MIPS | ✅ 官方库 | ✅（DS-CNN，~100KB） | ¥80–120 | ⭐⭐⭐ 主推 |
 | XMOS XU208 | xCORE × 8，500 MIPS | ✅ | ⚠️ 内存偏紧 | ¥40–60 | ⭐⭐ 成本优先 |
@@ -159,9 +159,7 @@
 | 波束成形（BF） | MVDR/GSC，指向主说话人方向 |
 | 声学回声消除（AEC） | 8-tap NLMS，参考信号来自扬声器 I2S 回环 |
 | 噪声抑制 + AGC | 抑制电机/步行噪声 |
-| **KWS_RT**（急停专用）| DS-CNN ~100KB，固化关键词集："停止/别动/危险/help"，**永不更新，经签名审核** |
-| 双路 VAD | 一路给 KWS_RT，一路给 SoC 侧 ASR |
-| GPIO + UART 急停通道 | KWS_RT 命中 → GPIO IRQ + UART 帧通知 SoC，绕过 ROS2 DDS，端到端 ≤ 200ms |
+| 双路 VAD | 一路给唤醒词检测，一路给 SoC 侧 ASR |
 
 ### 3.4 Audio Codec / 功放选型 `[行业通用]`
 
@@ -356,7 +354,6 @@ CosyVoice-Light：
 | RK3588 NPU ASR + TTS 分时是否产生优先级抢占 | RKNN Multi-context 压力测试 | 无反转，TTS 首包 ≤ 300ms |
 | XMOS XU316 AEC 在步行振动下的 ERLE 稳定性 | 步行 + TTS 同时播放，测 AEC 收敛 | ERLE ≥ 25 dB |
 | CosyVoice-Light RKNN INT8 量化后 MOS 衰减 | 主观 MOS 评分 N=10 | MOS ≥ 4.0 |
-| GPIO 急停端到端延迟（XMOS → SM）| 注入模拟 KWS 帧，测 SM 时间戳 | ≤ 200ms P99 |
 | 唤醒词在 SNR = -5 dB 下的唤醒率 | MUSAN 噪声库测试 | ≥ 90% |
 | 双 RK3588 方案可行性（如需扩展）| 参考灵犀 X2 架构，评估成本/功耗 | 决策文档 |
 

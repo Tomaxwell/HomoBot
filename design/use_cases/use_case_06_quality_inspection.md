@@ -37,7 +37,6 @@ sequenceDiagram
     participant MC as Motion Control
     participant UC as Upper Body Control
     participant LC as Lower Body Control
-    participant MS as Motion Streamer
     participant MP as Motion Player
     participant HDS as HDS
 
@@ -57,8 +56,7 @@ sequenceDiagram
     Agent->>Perception: 请求多角度视觉检测
 
     loop 多角度拍摄
-        Agent->>MS: 调整相机视角姿态
-        MS->>MC: 执行姿态调整
+        Agent->>MC: 调整相机视角姿态
         MC->>UC: 转发行上肢指令
         UC->>UC: IK+轨迹规划
         UC-->>MC: 上肢关节指令
@@ -99,15 +97,14 @@ sequenceDiagram
 |------|--------------|----------|
 | **Gateway** | 接收 MES 质检任务；回传质检报告与缺陷图片 | TE, MES, HDS |
 | **TE** | 编排质检全流程：移动→检测→报告→返回 | Gateway, SM, Agent, PnC, MP |
-| **SM** | 状态切换：`ACTIVE_WALKING`→`ACTIVE_STAND`（检测时静止） | TE, PnC, MS, MC |
-| **Agent** | 检测策略决策（看哪里、怎么看、判定标准） | TE, Perception, MS, Setting |
+| **SM** | 状态切换：`ACTIVE_WALKING`→`ACTIVE_STAND`（检测时静止） | TE, PnC, MC |
+| **Agent** | 检测策略决策（看哪里、怎么看、判定标准） | TE, Perception, MC, Setting |
 | **PnC** | 工位间移动；检测时的精确位姿保持 | TE, MC, Perception, VSLAM |
 | **Perception** | 高精度视觉检测：缺陷识别、尺寸测量、OCR 读码 | Agent, HAL_Sensor, TF |
 | **DR** | 质检数据记录（原始图像+检测结果+批次关联） | TE, Agent, Perception |
-| **MC** | 运动控制协调器：加载UC/LC插件，聚合关节指令，统一下发EtherCAT | UC, LC, PnC, MS, HAL_EtherCAT |
-| **UC** | 上肢控制插件：执行相机视角姿态调整、标记动作（举手/指示灯） | MC, MS, MP |
+| **MC** | 运动控制协调器：加载UC/LC插件，聚合关节指令，统一下发EtherCAT | UC, LC, PnC, HAL_EtherCAT |
+| **UC** | 上肢控制插件：执行相机视角姿态调整、标记动作（举手/指示灯） | MC, MP |
 | **LC** | 下肢控制插件：执行工位间轮式底盘移动 | MC, PnC, HAL_EtherCAT |
-| **MS** | 相机视角调整轨迹（俯仰/偏航微调） | Agent, MC |
 | **MP** | NG 品标记动作（如举手、LED 指示灯变化） | TE, MC |
 | **TF** | 相机标定变换；工件坐标系精确管理 | Perception, Agent |
 | **Setting** | 存储不同产品型号的检测参数（光照、角度、阈值） | Agent, Perception |
@@ -122,12 +119,11 @@ sequenceDiagram
 
 | Topic | 发布者 | 订阅者 | 说明 |
 |-------|--------|--------|------|
-| `/sm/robot_state` | SM | PnC, MC, MS | 全局状态 |
+| `/sm/robot_state` | SM | PnC, MC | 全局状态 |
 | `/pnc/cmd_vel` | PnC | MC | 工位间移动 |
 | `/perception/defect_detection` | Perception | Agent | 缺陷检测结果 |
 | `/perception/dimension_measure` | Perception | Agent | 尺寸测量结果 |
 | `/perception/ocr_result` | Perception | Agent | OCR 读码结果 |
-| `/ms/arm_stream` | MS | MC | 相机姿态调整 |
 | `/dr/inspection_frame` | DR | - | 质检帧记录 |
 
 ### Service 调用
@@ -136,7 +132,7 @@ sequenceDiagram
 |---------|--------|--------|------|
 | `/perpection/inspect_target` | Agent | Perception | 请求多角度检测 |
 | `/setting/get_inspection_params` | Agent | Setting | 读取产品检测参数 |
-| `/sm/is_motion_allowed` | MS, PnC | SM | 运动前校验 |
+| `/sm/is_motion_allowed` | PnC | SM | 运动前校验 |
 
 ### Action 调用
 
@@ -172,7 +168,7 @@ sequenceDiagram
 ### 检测精度保障
 
 - 检测时 SM 必须处于 `ACTIVE_STAND`，UC 执行主动振动抑制（上肢防抖）
-- 相机曝光期间（>10ms），MS 暂停轨迹更新，避免运动模糊
+- 相机曝光期间（>10ms），UC 暂停轨迹更新，避免运动模糊
 - 多视角检测结果由 Agent 做时空一致性校验（同一缺陷在不同视角中应可对应）
 
 ---

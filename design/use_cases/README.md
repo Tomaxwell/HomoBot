@@ -54,7 +54,7 @@
 | UC | Upper Body Control | 运动层 | 上肢控制插件（IK/轨迹规划/力控/夹爪） |
 | LC | Lower Body Control | 运动层 | 下肢控制插件（足式: RL+WBC+步态；轮式: 底盘+升降柱） |
 | MP | Motion Player | 运动层 | 预录动作序列播放 |
-| MS | Motion Streamer | 运动层 | 运动指令流式整形 |
+| MS | Motion Streamer | 运动层 | VR/动捕服数据接入与运动重定向 |
 | PnC | Planning and Control | 感知/规划层 | 路径规划 + 行走控制 |
 | Perception | Perception | 感知/规划层 | 视觉 + Lidar 感知融合 |
 | VSLAM | Vision SLAM | 感知/规划层 | 视觉建图定位 |

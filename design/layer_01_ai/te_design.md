@@ -694,7 +694,7 @@ Gateway/Agent 调用 /te/execute_composite (Action)
 | MC | TE → MC | `/mc/execute_motion` (Action) | 调用 MC 执行运动模式（STAND/WALKING/TELEOP/INFER/CALIBRATE 等）|
 | MC | TE → MC | `/mc/set_motion_mode` (Service) | 直接切换运动模式（轻量级）|
 | MP | TE → MP | `/mp/play_motion` (Action) | 调用动作播放 |
-| MS | TE → MS | `/ms/stream_motion` (Action) | 调用运动流执行 |
+| MS | TE → MS | `/ms/execute_teleop` (Action) | 启动/停止遥操会话 |
 | PnC | TE → PnC | `/pnc/navigate_to` (Action) | 调用导航 |
 | PnC | PnC → TE | Action Feedback | 导航进度反馈 |
 | HDS | TE → HDS | `/hds/report_health` (Service) | 上报任务执行异常、超时数据 |

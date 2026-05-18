@@ -57,10 +57,10 @@ sequenceDiagram
     SM-->>TE: 确认
     TE->>Operator: 遥操就绪，视频流回传
 
-    Operator->>Gateway: 开始遥操指令流(1kHz关节目标)
-    Gateway->>MS: 转发遥操指令(低延迟通道)
-    MS->>MS: 指令整形+安全限速
-    MS->>MC: 下发遥操运动指令
+    Operator->>MS: VR/动捕设备直连，开始遥操数据流
+    MS->>MS: 协议解析+人体姿态重建+运动重定向
+    MS->>MC: 下发重定向后的关节目标
+    MC->>MC: 轨迹平滑+安全限速
     MC->>UC: 转发上肢遥操指令
     MC->>LC: 转发下肢遥操指令
     UC->>UC: IK求解+轨迹规划+力控
@@ -76,9 +76,9 @@ sequenceDiagram
     TE->>DR: 启动高精度数据采集
     TE->>RC: 启动性能监控
     loop 遥操执行中(数采阶段)
-        Operator->>Gateway: 连续遥操指令
-        Gateway->>MS: 指令流
-        MS->>MC: 整形后指令
+        Operator->>MS: VR/动捕设备连续数据
+        MS->>MS: 运动重定向
+        MS->>MC: 重定向后关节目标
         MC->>UC: 上肢指令
         MC->>LC: 下肢指令
         UC->>UC: 上肢控制计算
@@ -96,7 +96,7 @@ sequenceDiagram
         UC->>DR: 上肢关节状态+末端位姿+接触力
         LC->>DR: 下肢关节状态+接触力
         MC->>DR: 全身关节状态聚合
-        MS->>DR: 遥操指令(操作员意图)
+        MS->>DR: 遥操关节目标(重定向后)
         PnC->>DR: 行走控制信号(如操作移动)
 
         DR->>DR: 时间同步+数据对齐(所有传感器统一时间戳)
@@ -131,11 +131,11 @@ sequenceDiagram
 
 | 模块               | 本场景中的职责                                                     | 协作对象                               |
 | ---------------- | ----------------------------------------------------------- | ---------------------------------- |
-| **Gateway**      | 低延迟遥操指令传输（WebRTC/RTC）；视频/传感器回传；操作员认证与授权                     | Operator, MS, TE, DR, HDS          |
+| **Gateway**      | 视频/传感器回传；操作员认证与授权；远程遥操模式时数据转发（可选）                     | Operator, TE, DR, HDS          |
 | **TE**           | 管理数采任务生命周期：配置加载→遥操就绪→采集→质检→上传                               | Gateway, SM, DR, RC, Agent         |
 | **SM**           | 遥操模式状态管理：`ACTIVE_ZERO_TORQUE`（就绪）→遥操执行→恢复；E-Stop 响应         | TE, MS, MC, HDS                    |
 | **Agent**        | 数采策略决策：任务选择、数据标注策略（成功/失败判定）、数据质量评估                          | TE, DR, Perception, Setting        |
-| **MS**           | **核心模块**：遥操指令整形（死区消除、平滑滤波）、安全限速、冲突仲裁                        | Gateway, MC, SM, HDS               |
+| **MS**           | **核心模块**：VR/动捕服数据接入、协议解析、人体姿态重建、运动重定向（Retargeting）              | MC, SM, HDS, Setting               |
 | **MC**           | 运动控制协调器：加载UC/LC插件，聚合关节指令，统一下发EtherCAT；全身状态估计；安全校验           | MS, UC, LC, HAL_EtherCAT, PnC, DR  |
 | **UC**           | 上肢控制插件：执行双臂遥操指令、IK求解、末端力控、夹爪控制、自碰撞检测                        | MC, HAL_EtherCAT, DR               |
 | **LC**           | 下肢控制插件：执行行走步态/WBC平衡控制（足式）或底盘移动/升降柱控制（轮式）                    | MC, PnC, HAL_EtherCAT, DR          |
@@ -144,7 +144,7 @@ sequenceDiagram
 | **DR**           | **核心模块**：全量传感器数据同步记录（Camera/Lidar/IMU/关节/力矩/遥操指令）；时间对齐；质量检查 | TE, Agent, Perception, MC, MS, PnC |
 | **HDS**          | 遥操链路健康监控（延迟、丢包、抖动）；数据完整性监控；异常时请求降级                          | Gateway, MS, SM, DR                |
 | **RC**           | 采集系统性能监控（带宽、CPU/GPU、存储 I/O），防止采集本身影响遥操延迟                    | TE, 全部模块                           |
-| **Setting**      | 遥操配置：映射关系（操作员动作→机器人关节）、灵敏度曲线、死区、限速参数                        | MS, TE, Agent                      |
+| **Setting**      | 遥操配置：设备参数、映射关系（操作员动作→机器人关节）、灵敏度曲线                        | MS, MC, TE, Agent                      |
 | **HAL_EtherCAT** | 1kHz 关节指令下发；关节状态+力矩高频回传                                     | MC, DR                             |
 | **HAL_Sensor**   | Camera/Lidar/IMU 原始数据高频采集                                   | Perception, VSLAM, Lidar-SLAM, DR  |
 | **VSLAM**        | 提供遥操过程中的机器人位姿（数据标注用）                                        | PnC, DR                            |
@@ -160,9 +160,8 @@ sequenceDiagram
 
 | Topic                      | 发布者          | 订阅者            | 说明                   |
 | -------------------------- | ------------ | -------------- | -------------------- |
-| `/gateway/teleop_cmd`      | Gateway      | MS             | 遥操指令流（关节目标/末端位姿）     |
 | `/gateway/video_stream`    | Gateway      | Operator       | 机器人第一视角视频回传          |
-| `/ms/cmd_stream`           | MS           | MC             | 整形后的遥操运动指令           |
+| `/ms/motion_target`        | MS           | MC             | 重定向后的遥操关节目标           |
 | `/mc/joint_states`         | HAL_EtherCAT | MC, DR         | 关节状态（位置/速度/力矩/电流/温度） |
 | `/uc/ee_pose`              | UC           | DR             | 末端执行器位姿              |
 | `/perception/object_poses` | Perception   | DR, Agent      | 场景中物体位姿（自动标注用）       |
@@ -193,7 +192,7 @@ sequenceDiagram
 | Action                        | 调用方     | 提供方 | 说明            |
 | ----------------------------- | ------- | --- | ------------- |
 | `/te/execute_data_collection` | Gateway | TE  | 数采任务执行（含进度反馈） |
-| `/ms/teleop_stream`           | Gateway | MS  | 遥操指令流式处理      |
+| `/ms/execute_teleop`          | TE      | MS  | 遥操会话执行（含进度反馈） |
 
 
 ---
@@ -231,7 +230,7 @@ sequenceDiagram
 
 - **延迟上限**：遥操指令端到端延迟 <100ms（VR 场景）或 <50ms（精细操作场景），超过时 HDS 告警并建议降速
 - **丢包处理**：指令流丢包 <1%，MC 的指令缓冲区可平滑补偿；丢包 >5% 时 TE 暂停采集
-- **指令限幅**：MS 对遥操指令执行硬限幅（关节角度/速度/力矩），防止操作员误操作导致损坏
+- **指令限幅**：MC 的 UC/LC 插件对遥操关节目标执行轨迹平滑和硬限幅（关节角度/速度/力矩），防止操作员误操作导致损坏
 - **碰撞检测**：UC 插件实时检测上肢自碰撞和外部碰撞，LC 插件实时检测下肢碰撞；预测碰撞时 MC 拒绝聚合并下发指令
 
 ### 人身安全
@@ -266,7 +265,7 @@ sequenceDiagram
 
 1. **Gateway** 检测到遥操指令 RTT 从 50ms 突增至 200ms
 2. **HDS** 收到延迟告警，定级为 `WARNING`
-3. **HDS** 建议 TE 降速：MS 将速度限幅从 100% 降至 50%
+3. **HDS** 建议 TE 降速：MC 将速度限幅从 100% 降至 50%
 4. **Operator** 感知到操作迟滞，系统 TTS 提示："网络延迟升高，已自动降速"
 5. 若延迟持续 >300ms 超过 5s：
   - HDS 请求 SM 切至 `DEGRADED`
@@ -277,8 +276,8 @@ sequenceDiagram
 ### 场景：操作员误操作导致机器人手臂快速挥动
 
 1. **Operator** 大幅度快速移动手柄，生成高速遥操指令
-2. **MS** 检测到指令速度 >`max_joint_speed`（3.0 rad/s），触发硬限幅
-3. **MS** 将超限指令裁剪至安全范围，同时向 HDS 上报 `CMD_LIMITED`
+2. **MC** 的 UC 插件检测到关节目标速度 >`max_joint_speed`（3.0 rad/s），触发硬限幅
+3. **MC** 将超限指令裁剪至安全范围，同时向 HDS 上报 `CMD_LIMITED`
 4. **MC** 将限幅后的安全指令分发给 UC/LC 插件执行，避免快速挥动
 5. **HDS** 记录事件，若限幅频繁触发，向 Operator 提示："请减小操作幅度"
 6. DR 记录完整事件链（原始指令+限幅后指令+执行结果），用于后续分析操作员行为模式

@@ -1,0 +1,20 @@
+# 执行遥操会话
+
+# Goal
+string device_id
+string device_type
+RetargetingConfig config
+int32 timeout_sec
+---
+# Result
+bool success
+uint16 error_code
+string message
+builtin_interfaces/Time actual_duration
+---
+# Feedback
+uint8 state
+float32 progress_percent
+float32 tracking_quality
+uint32 frames_processed
+string current_phase

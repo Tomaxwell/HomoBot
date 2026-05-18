@@ -7,27 +7,28 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
 find_package(ms_msgs REQUIRED)
 find_package(mc_msgs REQUIRED)
 find_package(sm_msgs REQUIRED)
 
 add_executable(ms_node
   src/ms_node.cpp
+  src/main.cpp
 )
 
 target_include_directories(ms_node PUBLIC
-  <BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  <INSTALL_INTERFACE:include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
 
-target_compile_features(ms_node PUBLIC c_std_99 cxx_std_17)
+target_compile_features(ms_node PUBLIC cxx_std_17)
 
 ament_target_dependencies(ms_node
   rclcpp
+  rclcpp_action
   std_msgs
-  geometry_msgs
   ms_msgs
   mc_msgs
   sm_msgs

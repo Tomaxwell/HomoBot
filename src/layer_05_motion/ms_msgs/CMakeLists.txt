@@ -8,26 +8,31 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(geometry_msgs REQUIRED)
 
 set(msg_files
-  "msg/MotionStreamerState.msg"
-  "msg/MotionCommand.msg"
-  "msg/MotionTarget.msg"
-  "msg/StreamStatistics.msg"
+  "msg/TeleopState.msg"
+  "msg/DeviceState.msg"
+  "msg/RetargetingConfig.msg"
   "msg/Heartbeat.msg"
 )
 
 set(srv_files
+  "srv/StartTeleop.srv"
+  "srv/StopTeleop.srv"
+  "srv/PauseTeleop.srv"
+  "srv/GetDeviceStatus.srv"
   "srv/GetHealthStatus.srv"
-  "srv/SetStreamParameters.srv"
-  "srv/StopStream.srv"
+)
+
+set(action_files
+  "action/ExecuteTeleop.action"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
   ${srv_files}
-  DEPENDENCIES builtin_interfaces geometry_msgs
+  ${action_files}
+  DEPENDENCIES builtin_interfaces
 )
 
 ament_export_dependencies(rosidl_default_runtime)

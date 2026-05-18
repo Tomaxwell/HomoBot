@@ -1,0 +1,52 @@
+flowchart TB
+    subgraph AgentNode["AgentNode (ROS2)"]
+        subgraph AgentLoop["Agent Loop (异步)"]
+            direction TB
+            Receive["1. Receive
+接收消息"]
+            CBuild["2. Context Build
+构建上下文"]
+            LLM["3. LLM Inference
+调用 LLM"]
+            ToolExec["4. Tool Execution
+解析并执行工具调用"]
+            Response["5. Response
+发送响应/提交任务"]
+            Receive --> CBuild --> LLM --> ToolExec --> Response
+        end
+
+        SR["Skill Registry
+技能注册表
+- perceive
+- query_state
+- dispatch_task
+- cancel_task
+- ask_user"]
+        MM["Memory Manager
+记忆管理
+- 短期对话记忆
+- 长期任务记忆
+- 自动归档"]
+        CB["Context Builder
+上下文构建
+- 系统提示词
+- 自动归档
+- 工具定义
+- 环境快照"]
+        CM["Confidence Monitor
+决策置信度监控
+- token 概率
+- 一致性检查
+- 低置信度标记"]
+        ROS2["ROS2 Interface Layer
+- Subscribers
+- Publishers
+- Service Server
+- Action Server"]
+    end
+
+    AgentLoop --> SR
+    AgentLoop --> MM
+    AgentLoop --> CB
+    AgentLoop --> CM
+    AgentLoop --> ROS2

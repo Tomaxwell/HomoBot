@@ -1,0 +1,11 @@
+# 启动遥操会话
+
+string device_id
+string device_type
+RetargetingConfig config
+int32 timeout_sec
+---
+bool success
+uint16 error_code
+string message
+string session_id

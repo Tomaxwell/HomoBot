@@ -67,7 +67,7 @@
 │              ├─ UC (上肢控制插件：IK/轨迹规划/力控/夹爪)               │
 │              ├─ LC (下肢控制插件：足式RL+WBC/轮式底盘+升降柱)         │
 │              MP (动作播放)                                           │
-│              MS (动作流整形与调度)                                    │
+│              MS (VR/动捕服数据接入与运动重定向)                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  中间件层     SM (全局状态机，17状态)                                 │
 │              EM (进程生命周期治理)                                    │
@@ -98,7 +98,7 @@
 | **UC** | Upper Body Control | 运动层 | 上肢控制插件（MC加载）：IK/轨迹规划/末端力控/夹爪/避自碰 | [uc_design.md](layer_05_motion/uc_design.md) |
 | **LC** | Lower Body Control | 运动层 | 下肢控制插件（MC加载）：足式RL+WBC+步态；轮式底盘+升降柱 | [lc_design.md](layer_05_motion/lc_design.md) |
 | **MP** | Motion Player | 运动层 | 预录动作序列执行，动作插值，时间同步 | [mp_design.md](layer_05_motion/mp_design.md) |
-| **MS** | Motion Streamer | 运动层 | 运动指令流式整形，平滑过渡，安全限幅 | [ms_design.md](layer_05_motion/ms_design.md) |
+| **MS** | Motion Streamer | 运动层 | VR/动捕服数据接入，人体→机器人运动重定向 | [ms_design.md](layer_05_motion/ms_design.md) |
 | **PnC** | Planning and Control | 感知/规划层 | 全局路径规划，局部轨迹跟踪，动态避障，行走控制信号 | [pnc_design.md](layer_04_perception_planning/pnc_design.md) |
 | **Perception** | Perception | 感知/规划层 | 视觉+Lidar多传感器融合，障碍物检测，语义分割 | [perception_design.md](layer_04_perception_planning/perception_design.md) |
 | **VSLAM** | Vision SLAM | 感知/规划层 | 视觉特征提取，视觉里程计，回环检测 | [vslam_design.md](layer_04_perception_planning/vslam_design.md) |

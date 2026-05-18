@@ -48,7 +48,7 @@
 | 主要输入 | 触屏点选、文本、摇杆 | 自然语言语音 |
 | 主要输出 | 屏幕图文 + 触觉反馈 + 视频流 | 扬声器语音 + 屏幕 LED |
 | 控制粒度 | 任务级、参数级、必要时关节级（教学） | 任务级、对话级 |
-| 紧急停止通道 | APP E-Stop 按钮 → SLE/UDP RT 通道 | 关键词 KWS_RT → GPIO 通道 |
+| 紧急停止通道 | APP E-Stop 按钮 → SLE/UDP RT 通道 | — |
 | 出口模块 | Gateway（唯一） | Gateway（云端 LLM 时） |
 
 两个子系统在 SM E-Stop 仲裁、Gateway 鉴权、HDS 上报等基础设施上**共享**，业务流程**正交**。
@@ -249,7 +249,6 @@ FOTA 触发        → L1 → L3
 
 `★ Insight ─────────────────────────────────────`
 - 通路 ⑥+⑦ 是本方案的关键架构：HAL_Camera 的相机帧不进 ROS2 域转发给 APP（ROS2 DDS 跨网络效率低、无硬编码），而是经 V4L2 直送 TXW828 内部 ISP→H.264 编码器→Wi-Fi/SLE 链路。这把视频与控制完全解耦，避免视频突发流量挤占 ROS2 控制 Topic。
-- 通路 ⑨ 与语音 KWS_RT 通道形成对偶：两者都通过 GPIO+UART 把"硬实时安全输入"独立汇入一个 systemd RT 服务，再统一上 SM。SM 的 E-Stop 仲裁器只关心来源标签，不关心物理通道。
 - 链路 L2 星闪 SLE 是 TXW828 的差异化卖点：宣称延迟为蓝牙 1/30~1/10，对教学示教和临场操作非常关键；缺点是当前消费级平板原生支持有限，需 dongle 或选用支持星闪的工程机。
 `─────────────────────────────────────────────────`
 
@@ -721,21 +720,6 @@ flowchart LR
 | 攻击者远程触发 | 同账号多设备登录时，SM E-Stop 仲裁器审计来源；无效 session 的 EStop 仍接受（安全优先），但记录审计日志 |
 | TXW828 死机 | 主 SoC 看门狗 5s 检测 TXW 心跳，连续丢失则把 TXW 隔离并降级到 Gateway 路径 |
 
-### 6.5 与语音 E-Stop / 触觉 E-Stop 的仲裁
-
-SM 的 E-Stop 仲裁器以来源标签维护优先级与统计：
-
-```
-来源       优先级    去抖动窗口    备注
-触觉      最高(100)  即时         物理硬件，绝对可信
-语音 KWS   高(90)    1 帧         本地物理麦阵
-APP STOP   高(85)    即时         本地（LAN/SLE）
-APP STOP   中(70)    100ms        云端中继（防抖动重传）
-SM 内部    中(60)    依业务       异常自触发
-```
-
-任意来源触发 → SM 立即转 `ACTIVE_E_STOP`，并把所有触发源记入 `RobotState.last_estop_sources` 供审计。
-
 ---
 
 ## 7. 端到端延迟预算（自顶向下分解）
@@ -757,7 +741,7 @@ SM 内部    中(60)    依业务       异常自触发
 
 - TXW828 固件中 SLE 与 BLE 共占 2.4G，需 TDM 调度，控制队列优先级 > 视频
 - Gateway 进程 CPU 亲和性绑定到主 SoC 大核，与 ROS2 executor 隔离
-- estop_app_service 为 SCHED_FIFO 优先级 90（与 estop_voice_service 同级）
+- estop_app_service 为 SCHED_FIFO 优先级 90
 - 视频帧 SDIO 传输与控制 UART 物理隔离（不同 DMA 通道）
 
 ### 7.3 核心 KPI 监测点
@@ -966,7 +950,7 @@ tablet_subsystem:
 - [ ] TXW828 固件 SLE+Wi-Fi+BLE TDM 调度的实测吞吐
 - [ ] Gateway 的 tablet 命令白名单与 .proto 定义对齐
 - [ ] APP UI 的"链路状态/可用功能"动态可视化设计
-- [ ] estop_app_service 与 estop_voice_service 共用同一 SM 仲裁器的代码评审
+- [ ] estop_app_service SM 仲裁器代码评审
 - [ ] 多平板控制权切换的法务条款与产品文案
 - [ ] 视频通路 WebRTC 自建 STUN/TURN 还是用云厂商 SaaS 的成本评估
 - [ ] 出厂联测：TXW828 SoM 在不同机器人型号外壳下的天线方向图
@@ -985,7 +969,7 @@ tablet_subsystem:
 - HDS：[hds_design.md](../design/layer_06_middleware/hds_design.md)
 - FOTA：[fota_design.md](../design/layer_03_application/fota_design.md)
 - HAL_Camera：[hal_camera_design.md](../design/layer_07_hal_infra/hal_camera_design.md)
-- 语音子系统：[voice_interaction_subsystem.md](./voice_interaction_subsystem.md)（紧急停止仲裁约定与本子系统共享）
+- 语音子系统：[voice_interaction_subsystem.md](./voice_interaction_subsystem.md）
 
 ### 12.2 外部技术参考
 
@@ -1010,19 +994,7 @@ tablet_subsystem:
 | FOTA 触发 | ✅ | ❌ | ✅ | ❌ |
 | 心跳 | ✅ | ✅ | ✅（推送通道） | ❌ |
 
-## 附录 B：与语音子系统的对偶表
-
-| 维度 | 平板 E-Stop | 语音 E-Stop |
-|------|-----------|-----------|
-| 输入侧 | APP 按钮 / 平板硬件按钮 | KWS_RT 关键词 |
-| 物理通路 | SLE/Wi-Fi/MQTT 三通道并发 | DSP → GPIO + UART |
-| 主 SoC 入口 | `estop_app_service` | `estop_voice_service` |
-| ROS2 入口 | `/sm/app_estop` | `/sm/voice_estop` |
-| 仲裁者 | SM E-Stop 仲裁器 | SM E-Stop 仲裁器（同一） |
-| 优先级 | 85（LAN/SLE）/ 70（云端） | 90 |
-| 延迟目标 | 100ms（LAN/SLE）/ 600ms（云端） | 200ms |
-
-## 附录 C：变更记录
+## 附录 B：变更记录
 
 | 日期 | 版本 | 变更 |
 |------|------|------|

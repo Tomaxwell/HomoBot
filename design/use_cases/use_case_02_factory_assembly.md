@@ -30,7 +30,6 @@ sequenceDiagram
     participant TE as Task Engine
     participant SM as State Manager
     participant Agent as Agent
-    participant MS as Motion Streamer
     participant MC as Motion Control
     participant UC as Upper Body Control
     participant LC as Lower Body Control
@@ -56,9 +55,7 @@ sequenceDiagram
     Agent->>Perception: 请求工件6DoF位姿检测
     Perception-->>Agent: 返回工件位姿+置信度
 
-    Agent->>MS: 发送抓取轨迹流(右臂)
-    MS->>MS: 轨迹整形+限速
-    MS->>MC: 下发整形后的关节指令
+    Agent->>MC: 发送抓取运动目标(右臂)
     MC->>UC: 转发上肢控制指令
     UC->>UC: IK求解+轨迹跟踪+力控闭环
     UC-->>MC: 上肢关节力矩/位置指令
@@ -68,8 +65,7 @@ sequenceDiagram
     UC->>UC: 力控闭环调整
 
     alt 需要双手协作
-        Agent->>MS: 发送辅助臂轨迹流(左臂)
-        MS->>MC: 下发左臂指令
+        Agent->>MC: 发送辅助臂运动目标(左臂)
         MC->>UC: 转发双臂协调指令
         UC->>UC: 双臂IK+自碰撞规避+力控协调
         UC-->>MC: 双臂关节指令
@@ -102,11 +98,10 @@ sequenceDiagram
 | 模块 | 本场景中的职责 | 协作对象 |
 |------|--------------|----------|
 | **Gateway** | 接收 MES 系统装配指令；上报产线状态与质量数据 | TE, HDS, Operator |
-| **TE** | 编排装配全流程：移动→定位→抓取→装配→质检→移动 | Gateway, SM, Agent, PnC, MP, MS |
-| **SM** | 管理 `ACTIVE_READY`→`ACTIVE_MOTION`→`ACTIVE_STAND` 状态流转 | TE, MC, MS, MP, HDS |
-| **Agent** | 视觉引导的抓取/装配策略决策；双臂协调规划 | TE, Perception, MS, MP, Setting |
-| **MS** | 将 Agent 生成的连续运动意图整形为平滑轨迹，100Hz 下发 | Agent, MC, SM |
-| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合全身关节指令，统一下发 EtherCAT | UC, LC, MS, MP, SM, HAL_EtherCAT, PnC |
+| **TE** | 编排装配全流程：移动→定位→抓取→装配→质检→移动 | Gateway, SM, Agent, PnC, MP, MC |
+| **SM** | 管理 `ACTIVE_READY`→`ACTIVE_MOTION`→`ACTIVE_STAND` 状态流转 | TE, MC, MP, HDS |
+| **Agent** | 视觉引导的抓取/装配策略决策；双臂协调规划 | TE, Perception, MC, MP, Setting |
+| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合全身关节指令，统一下发 EtherCAT | UC, LC, MP, SM, HAL_EtherCAT, PnC |
 | **UC** | 上肢控制插件：执行双臂 IK、轨迹跟踪、末端力控、自碰撞规避 | MC, HAL_EtherCAT |
 | **LC** | 下肢控制插件（足式）：执行站立/行走步态、RL 策略、WBC 平衡计算 | MC, PnC, HAL_EtherCAT |
 | **MP** | 播放预录的装配辅助动作（如从固定位置取料的标准动作） | TE, MC, SM |
@@ -115,7 +110,7 @@ sequenceDiagram
 | **HAL_EtherCAT** | 驱动双臂/下肢电机；回传力矩/位置传感器数据 | MC, UC, LC |
 | **HDS** | 监控力控异常（过力、滑移）；定级故障 | MC, UC, HAL_EtherCAT, SM |
 | **TF** | 提供相机-手臂标定变换；工件坐标系管理 | Perception, Agent, UC |
-| **Setting** | 存储不同工件型号的装配参数（力阈值、速度等） | Agent, MP, MS |
+| **Setting** | 存储不同工件型号的装配参数（力阈值、速度等） | Agent, MP, MC |
 
 ---
 
@@ -125,8 +120,7 @@ sequenceDiagram
 
 | Topic | 发布者 | 订阅者 | 说明 |
 |-------|--------|--------|------|
-| `/sm/robot_state` | SM | MC, MS, MP, PnC | 全局状态 |
-| `/ms/cmd_stream` | MS | MC | 整形后的运动指令流 |
+| `/sm/robot_state` | SM | MC, MP, PnC | 全局状态 |
 | `/mc/joint_cmd` | MC | HAL_EtherCAT | 聚合后的全身关节力矩/位置指令 |
 | `/perception/object_pose` | Perception | Agent | 工件 6DoF 位姿 |
 | `/perception/quality_result` | Perception | Agent | 装配质量检测结果 |
@@ -137,9 +131,9 @@ sequenceDiagram
 
 | Service | 调用方 | 提供方 | 说明 |
 |---------|--------|--------|------|
-| `/sm/is_motion_allowed` | MS, MP, MC | SM | 每次运动前校验 |
+| `/sm/is_motion_allowed` | MP, MC | SM | 每次运动前校验 |
 | `/perception/detect_object` | Agent | Perception | 请求工件位姿检测 |
-| `/setting/get_param` | Agent, MS | Setting | 读取工件装配参数 |
+| `/setting/get_param` | Agent, MC | Setting | 读取工件装配参数 |
 | `/hds/query_health` | TE | HDS | 装配前健康检查 |
 
 ### Action 调用
@@ -188,7 +182,7 @@ sequenceDiagram
 | `assembly.force_limit` | 20 N | 装配接触力上限 |
 | `assembly.approach_speed` | 0.02 m/s | 接近工件速度（防止碰撞） |
 | `assembly.align_tolerance` | 0.5 mm | 装配对准精度 |
-| `ms.arm_stream_rate` | 100 Hz | 手臂指令流输出频率 |
+| `mc.arm_cmd_rate` | 100 Hz | 手臂指令输出频率 |
 | `uc.force_priority` | 1 | 力控任务优先级（最高） |
 | `perception.pose_confidence` | 0.90 | 位姿检测最低置信度 |
 

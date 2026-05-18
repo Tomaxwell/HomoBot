@@ -20,7 +20,6 @@
 本文档**不重复**各模块文档已经定义的接口和内部实现，只补全模块文档之间的"接缝"：
 - 声学/电气硬件方案（模块文档中均未涉及）
 - 端到端延迟预算如何分配给各模块
-- 语音 E-Stop 这条横切硬实时安全通道
 - 端云分流策略与模型选型决策
 - 部署拓扑与冷/热启动顺序
 
@@ -33,7 +32,7 @@
 | **Agent** | LLM 推理 + 技能调用 + 长期记忆 | [agent_design.md](../design/layer_01_ai/agent_design.md) |
 | **Gateway** | 云端 ASR/TTS/LLM fallback 出口 | [gateway_design.md](../design/layer_06_middleware/gateway_design.md) |
 | **MP** | 交互伴随动作（点头/挥手/表情） | [mp_design.md](../design/layer_05_motion/mp_design.md) |
-| **SM** | 状态校验 + E-Stop 仲裁 | [sm_design.md](../design/layer_06_middleware/sm_design.md) |
+| **SM** | 状态校验 | [sm_design.md](../design/layer_06_middleware/sm_design.md) |
 | **HDS** | ASR/TTS 健康监测 + 故障定级 | [hds_design.md](../design/layer_06_middleware/hds_design.md) |
 | **DR** | 交互数据采集（VLA 训练数据） | [dr_design.md](../design/layer_03_application/dr_design.md) |
 
@@ -54,15 +53,13 @@
 | 多模态意图融合 | 语音 + 视觉 + 触觉 + 消息四模态时间窗融合 |
 | LLM 推理与规划 | 端侧 LLM 优先（< 500ms），云端 LLM 作为复杂场景 fallback |
 | 流式 TTS | 端侧轻量合成 + 云端高保真，缓存命中常用回复 |
-| 语音 E-Stop | 独立 KWS → SM 硬实时通道，端到端 ≤ 200ms |
 | 多人识别 | 声纹 + 人脸交叉验证（与 Perception/Interaction 协同） |
 | 隐私保护 | 一键本地模式，禁用云端，原始音频不外传 |
 
 ### 1.3 设计原则
 
 - **分层可降级**：每一层都有 fallback（云端→端侧→缓存→静默）
-- **安全旁路**：E-Stop 路径独立于交互主链，任何主链异常不阻塞 E-Stop
-- **接口规范化**：所有跨模块通信走 ROS2 标准接口（Topic/Service/Action），唯一例外是 KWS→SM 的 RT 通道
+- **接口规范化**：所有跨模块通信走 ROS2 标准接口（Topic/Service/Action）
 - **隐私优先**：默认本地处理，云端调用需明确 fallback 触发条件
 
 ---
@@ -78,9 +75,8 @@
 | F-3 | 自由对话识别字错率（CER） ≤ 8% | 普通话，云端 ASR |
 | F-4 | TTS MOS ≥ 4.0（自然度） | 主观评分 N=20 |
 | F-5 | 多模态融合：语音 + 手势同时下达"拿那个"，识别为单一组合意图 | 融合窗口 500ms |
-| F-6 | 语音 E-Stop："停止/别动/危险"端到端 ≤ 200ms 触达 SM | 见 §6 |
-| F-7 | 弱网/断网时端侧仍可完成唤醒 + 命令词识别 + 常用回复 TTS | 网络断开自动测试 |
-| F-8 | 隐私模式：一键关闭云端，所有数据本地处理且不写入持久化 | Privacy 模式审计 |
+| F-6 | 弱网/断网时端侧仍可完成唤醒 + 命令词识别 + 常用回复 TTS | 网络断开自动测试 |
+| F-7 | 隐私模式：一键关闭云端，所有数据本地处理且不写入持久化 | Privacy 模式审计 |
 
 ### 2.2 非功能性需求
 
@@ -118,7 +114,7 @@ flowchart TB
         AEC["AEC<br/>(回声消除)"]
         NS["NS+AGC"]
         VAD["VAD"]
-        KWS_RT["KWS_RT<br/>(E-Stop专用<br/>关键词)"]
+        KWS["KWS<br/>(唤醒词检测)"]
     end
 
     subgraph SW["主 SoC 软件 (Linux + ROS2)"]
@@ -139,15 +135,12 @@ flowchart TB
     User -- 声波 --> Mic
     Mic -- PDM --> DSP
     DSP --> BF --> AEC --> NS --> VAD
-    NS --> KWS_RT
+    NS --> KWS
     DSP -- I2S TDM (4ch upstream) --> Codec
     Codec -- ALSA --> SoC
     SoC --> HALAudio
     HALAudio --> ASR_L
     HALAudio --> TTS_L
-
-    KWS_RT == "RT 通道<br/>(GPIO + UART)" ==> SoC
-    SoC == "estop_voice 信号" ==> SM
 
     HALAudio --> Interaction
     Interaction --> Agent
@@ -170,7 +163,7 @@ flowchart TB
     classDef cloud fill:#f4dcfa,stroke:#7a2d8a,color:#333
 
     class Mic,Spk,DSP,Codec,SoC hw
-    class BF,AEC,NS,VAD,KWS_RT fw
+    class BF,AEC,NS,VAD,KWS fw
     class HALAudio,ASR_L,TTS_L,Interaction,Agent,Gateway,SM,MP,DR,HDS sw
     class Cloud cloud
 ```
@@ -185,11 +178,9 @@ flowchart TB
 | ④ SoC 内 ASR/TTS | RAM | — | — | HAL_Audio |
 | ⑤ HAL_Audio → 上层 | ROS2 Topic/Action | 事件驱动 | 共享内存（DDS） | ROS2 |
 | ⑥ Gateway → 云 | MQTT/WebSocket over TLS | 突发 | WiFi/5G | Gateway |
-| ⑦ KWS_RT → SoC | GPIO 中断 + UART | 事件 | GPIO/UART | DSP 固件 |
-| ⑧ SoC → Codec → 扬声器 | I2S | 48 kHz × 2ch | I2S | HAL_Audio |
+| ⑦ SoC → Codec → 扬声器 | I2S | 48 kHz × 2ch | I2S | HAL_Audio |
 
 `★ Insight ─────────────────────────────────────`
-- 通路 ⑦ 是本方案的核心安全设计：KWS_RT 不走 ROS2/Linux 网络栈，而是 DSP 通过 GPIO 中断 + UART 帧直接通知主 SoC 上的一个独立 systemd 服务，再由该服务调用 SM 的 E-Stop Service。这避开了 ROS2 DDS 序列化、调度器抖动、Python GIL 等不可预测延迟。
 - 通路 ③ 是 4 通道上行（不仅是单声道），保留通道独立性给上层后续可能的回声消除二次处理或声源定位（DOA）使用。
 - ASR 和 TTS 的本地推理模型尽量走 RK3588 NPU（RKNN runtime），把 CPU 留给 ROS2 调度。
 `─────────────────────────────────────────────────`
@@ -247,7 +238,7 @@ flowchart TB
 
 ### 4.2 关键芯片选型
 
-#### 4.2.1 音频 DSP（专用，前端预处理 + KWS_RT）
+#### 4.2.1 音频 DSP（专用，前端预处理 + KWS）
 
 | 候选 | 优势 | 劣势 | 推荐 |
 |------|------|------|------|
@@ -260,8 +251,8 @@ flowchart TB
 - 自适应波束成形（GSC/MVDR）
 - AEC（远端 reference 来自 SoC I2S 回环）
 - 噪声抑制 + AGC
-- 双 VAD 输出（一个给 ASR，一个给 KWS_RT）
-- **KWS_RT**：常驻关键词检测器，专门用于"停止/别动/危险/help"等紧急词
+- 双 VAD 输出（一个给 ASR，一个给 KWS）
+- **KWS**：常驻关键词检测器，用于唤醒词检测
 
 #### 4.2.2 主 SoC（NPU 推理 + ROS2）
 
@@ -292,10 +283,10 @@ flowchart LR
         AEC2["AEC\n(8-tap NLMS)"]
         NS2["NS + AGC"]
         VAD2["VAD"]
-        KWSRT["KWS_RT\n8 关键词\nDS-CNN ~100KB"]
+        KWS["KWS\n唤醒词检测\nDS-CNN ~100KB"]
 
         PDM --> DEC --> BF --> AEC2 --> NS2 --> VAD2
-        NS2 --> KWSRT
+        NS2 --> KWS
     end
 
     subgraph SoC["RK3588 (Linux + ROS2)"]
@@ -311,7 +302,7 @@ flowchart LR
 
     Mics([麦阵 × 4]) --> PDM
     NS2 --> |I2S TDM 8slot|ALSA
-    KWSRT --> |GPIO IRQ + UART|SoCRT["estop_voice 服务"]
+    KWS --> |GPIO IRQ|WW
 
     ALSA --> Pipe --> WW --> ASRL
     TTSL --> Mix --> ALSAOUT
@@ -329,8 +320,8 @@ flowchart LR
 **关键决策说明**：
 
 1. **AEC 在 DSP 内做**：避免 SoC 上 ROS2 调度抖动导致的 reference 信号延迟漂移（通常 SoC 侧 AEC 难以稳定 ≤ 10ms）
-2. **唤醒词分两层**：DSP 内只做"E-Stop 紧急词"（少且固定），节省 DSP 内存；常规唤醒词（"小步小步"）在 SoC NPU 上做，可热更新
-3. **VAD 也分两层**：DSP 给 KWS_RT 用（轻量），SoC 给 ASR 用（更精确含尾点检测）
+2. **唤醒词在 SoC NPU 上做**：常规唤醒词（"小步小步"）在 SoC NPU 上做，可热更新
+3. **VAD 也分两层**：DSP 给 KWS 用（轻量），SoC 给 ASR 用（更精确含尾点检测）
 
 ### 4.4 安装与机械约束
 
@@ -350,7 +341,7 @@ flowchart LR
 | MCLK 12.288 MHz | 板载 TCXO（独立晶振） | 不与 SoC 复用，避免抖动 |
 | BCLK / LRCLK | DSP 内部分频 | I2S 主时钟 |
 | DSP VDD 3.3V | LDO 独立 | 隔离主板电源噪声 |
-| 待机功耗 | DSP（仅 KWS_RT）≤ 50mW；SoC 大核休眠 | 整机待机 < 2W |
+| 待机功耗 | DSP（仅 KWS）≤ 50mW；SoC 大核休眠 | 整机待机 < 2W |
 
 ---
 
@@ -364,7 +355,7 @@ flowchart LR
 | **Interaction** | ASR 文本、视觉/触觉意图 | `VoiceIntent`、`InteractionEvent`、TTS 请求 | `/interaction/interaction_event` → Agent |
 | **Agent** | `InteractionEvent` | `AgentResponse`、`TaskProposal` | `/agent/agent_response` → Interaction |
 | **Gateway** | Agent 云端推理请求、HAL_Audio 云端 ASR/TTS 请求 | 云端响应 | 内部 Service（不上 ROS2 总线） |
-| **SM** | 各模块状态、E-Stop 触发 | `RobotState` | `/sm/voice_estop`（新增 Service，见 §6） |
+| **SM** | 各模块状态 | `RobotState` | `/sm/robot_state` |
 | **MP** | `EmotionState` 中的 motion_hint | 关节动作 | `/mp/play_motion`（Action） |
 | **HDS** | 各模块心跳、ASR/TTS 时延、KWS 误触统计 | 故障定级 | `/hds/health_report` |
 | **DR** | `SpeechRecognitionResult`、`InteractionEvent` | 训练数据集 | 录制按需采样 |
@@ -439,7 +430,7 @@ sequenceDiagram
 | 1 | +200 ms | HAL_Audio 打开 ALSA 设备，DSP 初始化（XMOS 已 boot） |
 | 2 | +800 ms | RKNN runtime 加载 KWS / ASR / TTS 模型到 NPU |
 | 3 | +900 ms | TTS 缓存预加载（"好的"、"我在"、"请稍等"、"已完成" × 4 模型） |
-| 4 | +1000 ms | 进入 READY，开始 KWS 监听（DSP 已经一直在 KWS_RT，主 SoC KWS 此时启动） |
+| 4 | +1000 ms | 进入 READY，开始 KWS 监听（DSP 已经一直在 KWS，主 SoC KWS 此时启动） |
 | 5 | — | Interaction 收到 `audio_device_state`（READY） |
 
 #### 5.3.2 流程 B：流式 TTS（首包优先）
@@ -512,7 +503,6 @@ flowchart LR
 | `/hal_audio/speak` | Action | Interaction → HAL_Audio |
 | `/hal_audio/set_audio_parameters` | Service | Setting → HAL_Audio |
 | `/interaction/set_interaction_mode` | Service | Setting → Interaction |
-| `/sm/voice_estop` | **Service（新增）** | estop_voice_service → SM（见 §6） |
 
 #### 5.4.3 不允许跨过的接口（红线）
 
@@ -525,7 +515,6 @@ flowchart LR
 
 | 任务 | 端侧模型（首选） | 云端模型（fallback） | 切换触发 |
 |------|---------------|------------------|---------|
-| **KWS_RT**（E-Stop） | DS-CNN ~100 KB（XMOS 内） | — | 永远本地 |
 | **唤醒词** | Sherpa-onnx KWS（"小步小步"） | — | 永远本地 |
 | **ASR** | Sherpa-onnx Streaming Conformer-Tiny（中文 30MB INT8） | 火山/阿里实时 ASR | 置信度 < 0.85 或音频时长 > 5s |
 | **TTS** | VITS-lite + HiFi-GAN（80MB） | 火山 TTS | 高保真音色需求 / OOV 复杂文本 |
@@ -539,93 +528,8 @@ flowchart LR
 
 `★ Insight ─────────────────────────────────────`
 - 模型选型有三个潜在的"非显然"决策：(1) ASR 用 streaming Conformer 而不是 Whisper，因 Whisper 是非流式延迟高；(2) TTS 用 VITS 而非 Tacotron2，因前者推理速度更快、单次合成；(3) 端侧 LLM q4_0 量化是为了在 RK3588 NPU 上能 ≥ 10 token/s。
-- 唤醒词和 KWS_RT **不能合并**：前者要灵活（用户可改唤醒词，需热更新），后者要安全（关键词集合需冻结、固化在 DSP 固件中过签名审核）。
 - 端云分流的 confidence 阈值 0.85 不是拍脑袋——这是端侧 ASR 在标注集上的 P95 准确率分位点；低于这个阈值的样本才有"上云改善"的统计意义。
 `─────────────────────────────────────────────────`
-
----
-
-## 6. 语音 E-Stop 安全通道（独立硬实时设计）
-
-### 6.1 为什么要独立通道？
-
-主交互链 `Mic → ASR → Interaction → Agent → SM` 的延迟由多个软实时段串联组成（DDS 序列化、Python GIL、LLM 推理），抖动可达数百毫秒。在用户说"停止"时，机器人可能正在做高速动作，**任何 > 200ms 的延迟都不可接受**。
-
-### 6.2 通道架构
-
-```mermaid
-flowchart LR
-    User([用户喊"停止"]) --> Mic([麦阵])
-    Mic --> DSP["XMOS DSP\nBF + AEC + NS"]
-    DSP --> KWSRT["KWS_RT\n固化模型\n8 关键词"]
-
-    KWSRT --> |GPIO IRQ| GPIO["SoC GPIO\n(中断号 IRQ_VOICE_ESTOP)"]
-    KWSRT --> |UART 帧\nkeyword + score| UART["SoC UART\n/dev/ttyVoiceEstop"]
-
-    GPIO --> Svc["estop_voice_service\n(systemd 服务)"]
-    UART --> Svc
-
-    Svc --> |"/sm/voice_estop\n(Service)"| SM["SM"]
-    SM --> |"transition →\nACTIVE_E_STOP"| MC["MC 立即急停"]
-
-    classDef rt fill:#fde7e7,stroke:#b03030,color:#333
-    class KWSRT,GPIO,UART,Svc,SM rt
-```
-
-### 6.3 时间预算（目标 ≤ 200ms 端到端）
-
-| 段 | 预算 | 实际典型 |
-|----|------|---------|
-| 用户说完到 DSP 缓冲完成 | 80 ms | 帧长 + 推理窗口 |
-| KWS_RT 推理（DSP） | 30 ms | DS-CNN @ XMOS |
-| GPIO 中断到 systemd 服务唤醒 | 5 ms | 内核 RT 抢占 |
-| systemd 服务读 UART + 校验 | 10 ms | 单帧 < 32 字节 |
-| Service 调用 SM | 20 ms | DDS 本地回环 |
-| SM 状态转换 + 广播 | 30 ms | SM 内部仲裁 |
-| MC 收到 ACTIVE_E_STOP 并停止 | 25 ms | MC 1kHz 控制环 |
-| **总计** | **200 ms** | — |
-
-### 6.4 接口定义（新增）
-
-```
-# sm_msgs/srv/VoiceEStop.srv
-# 由 estop_voice_service 调用，请求 SM 立即转入 ACTIVE_E_STOP
-
-uint8 keyword_id            # 关键词 ID（"stop"=1, "danger"=2, "help"=3, ...）
-float32 score               # KWS 置信度
-builtin_interfaces/Time detected_at
-string source               # "voice_kws_rt"
----
-bool accepted               # SM 是否接受（不可拒绝，但记录）
-uint8 prev_state
-builtin_interfaces/Time acted_at
-```
-
-**节点架构**：
-
-```
-estop_voice_service (systemd, RT priority 90)
-  ├── 监听 GPIO IRQ_VOICE_ESTOP
-  ├── 读 UART 帧（关键词 ID + score + crc8）
-  ├── 校验：关键词 ID ∈ 白名单 && score ≥ 0.85 && crc 通过
-  ├── 调用 /sm/voice_estop（同步 Service，超时 50ms）
-  └── 失败时改用 /sm/emergency_stop（备份 Service）
-```
-
-### 6.5 防误触机制
-
-| 风险 | 缓解 |
-|------|------|
-| 电视/广播说"停止" | 与人脸/触觉 + 声源 DOA 加权（DSP 已知 DOA）；非用户方向降权 |
-| 自体 TTS 说"停止" | DSP 内 AEC 已消除自体声；TTS 播放时主动屏蔽 KWS_RT 的 100ms 输入 |
-| 单次误触发 | 要求 score ≥ 0.85；连续两帧命中才确认；首次仅警告（LED 黄闪）|
-| KWS_RT 持续刷脸 | UART 帧自带速率限制（最多 1 次/秒） |
-
-### 6.6 失能与维护
-
-- KWS_RT 模型与关键词集合通过 FOTA 升级，**必须经过签名校验**（防恶意篡改放行词）
-- 关键词集合冻结在白名单：`["stop", "halt", "停止", "别动", "danger", "危险", "help", "救命"]`
-- 不允许用户在运行时修改 KWS_RT 关键词，仅可由 OTA 推送
 
 ---
 
@@ -638,13 +542,12 @@ estop_voice_service (systemd, RT priority 90)
 | 唤醒响应（"小步" → "我在"） | **800 ms** | DSP 80 + SoC KWS 50 + Interaction 状态切 30 + TTS 缓存命中 100 + ALSA 缓冲 + 扬声器 = 800 ms |
 | 一轮简单对话（端侧 LLM） | **1.5 s** | ASR 300 + 意图 50 + Agent 500 + TTS 首包 300 + 播放 350 |
 | 一轮复杂对话（云端 LLM） | **3.0 s** | ASR 300 + 意图 50 + Gateway 50 + Cloud LLM 1500 + TTS 首包 300 + 播放 800 |
-| 语音 E-Stop | **200 ms** | 见 §6.3 |
 | TTS 首包 | **300 ms** | 缓存命中 ≤ 50ms；冷推理 250ms |
 
 ### 7.2 抖动控制要求
 
 - HAL_Audio 节点：CallbackGroup 至少分 4 组（采集线程 / ASR / TTS / Heartbeat），ASR 推理不阻塞 TTS
-- 采集线程为 SCHED_FIFO 优先级 80（仅次于 estop_voice_service 的 90）
+- 采集线程为 SCHED_FIFO 优先级 80
 - TTS 推理使用独立 thread pool，不进入 ROS2 executor 默认线程
 
 ### 7.3 核心 KPI 监测点
@@ -672,12 +575,10 @@ systemd
 │       ├── striding-interaction.service
 │       ├── striding-agent.service
 │       └── striding-gateway.service
-├── striding-estop-voice.service        # 独立运行，RT 优先级 90，不依赖 ROS2 整体启动
 └── striding-rkllm-service.service      # NPU LLM 推理后端，HAL_Audio + Agent 共享
 ```
 
 **启动顺序约束**：
-- `estop-voice` 必须**先于** MC/SM 启动后激活，避免运动启动后无法急停
 - `hal-audio` 在 `tf` + `hal-ethercat` 后启动（依赖音频时钟可用）
 - LLM 模型加载到 NPU 是阻塞操作，HAL_Audio 启动前需异步预热
 
@@ -699,7 +600,7 @@ systemd
 
 /opt/striding/firmware/dsp/
 ├── xmos_xu316_v1.2.3.bin          # DSP 固件
-└── kws_rt_keywords_v1.0.bin       # KWS_RT 关键词模型（签名）
+└── kws_keywords_v1.0.bin          # KWS 关键词模型（签名）
 ```
 
 模型升级走 FOTA。DSP 固件升级需断电重新启动（设计为可滚回）。
@@ -712,7 +613,6 @@ systemd
 # voice_subsystem.yaml （聚合视图，实际分散在各模块）
 voice_subsystem:
   wake_word: "你好小步"
-  emergency_keywords: ["stop", "halt", "停止", "别动", "danger", "危险"]
   asr:
     cloud_fallback_threshold_confidence: 0.85
     cloud_fallback_max_audio_sec: 5.0
@@ -723,10 +623,6 @@ voice_subsystem:
   privacy:
     default_mode: "normal"     # normal / privacy
     auto_enter_privacy_after_idle_min: 0   # 0=禁用
-  estop_voice:
-    min_kws_score: 0.85
-    consecutive_frames_required: 2
-    sm_call_timeout_ms: 50
 ```
 
 ---
@@ -736,9 +632,9 @@ voice_subsystem:
 ### 9.1 安全约束（运动相关）
 
 - HAL_Audio **不允许**直接调用 MC/MS/MP 接口（必须经 Interaction → Agent → TE）
-- 任何"停止类"关键词，无论由 KWS_RT 还是常规 ASR 检出，最终都由 SM 仲裁；SM 是唯一状态权威
-- `FAULT` / `ACTIVE_E_STOP` 状态下：
-  - HAL_Audio 停止 ASR 推理（保留 KWS_RT 一直运行）
+- 任何"停止类"关键词由常规 ASR 检出，经 Interaction → Agent → TE 路径处理；SM 是唯一状态权威
+- `FAULT` 状态下：
+  - HAL_Audio 停止 ASR 推理（保留 KWS 一直运行）
   - Interaction 停止 TTS 请求生成（除安全提示音）
   - Agent 暂停推理循环
 
@@ -769,7 +665,6 @@ voice_subsystem:
 | HAL_Audio | KWS 命中率、ASR 流式接口、TTS 缓存命中、AEC ERLE 实测 |
 | Interaction | 多模态融合时序、状态机转换、隐私模式切换 |
 | Agent | 工具调用 schema 校验、上下文截断 |
-| estop_voice_service | UART 帧 CRC、白名单关键词 ID、Service 超时降级 |
 
 ### 10.2 集成测试场景
 
@@ -780,9 +675,7 @@ voice_subsystem:
 | IT-V3 | 弱网（带宽限至 64 kbps）连续对话 10 轮 | 无卡死，自动降级到端侧 |
 | IT-V4 | 完全断网 30 分钟 | 唤醒 + 命令词正常 |
 | IT-V5 | 隐私模式审计 | 抓包确认 Gateway 无音频上传 |
-| IT-V6 | 语音 E-Stop（机器人行走中喊"停止"） | ≤ 200ms 进入 ACTIVE_E_STOP |
-| IT-V7 | TTS 自体说"停止" | KWS_RT 不被触发（AEC + 主动屏蔽） |
-| IT-V8 | KWS_RT 误触发率 | 24 小时家庭噪声 ≤ 0.5 次 |
+| IT-V6 | KWS 误触发率 | 24 小时家庭噪声 ≤ 0.5 次 |
 
 ### 10.3 性能基准
 
@@ -792,7 +685,6 @@ voice_subsystem:
 
 ### 10.4 安全测试
 
-- E-Stop 通道断网测试：拔网线，验证 KWS_RT → SM 仍 ≤ 200ms
 - DSP 固件签名测试：尝试加载未签名 KWS 关键词包，必须被拒绝
 - 滥用测试：构造非 Interaction 来源的伪 TTS 请求，验证被拒
 
@@ -807,15 +699,13 @@ voice_subsystem:
 | 流式 TTS 首包延迟在长句开头依然可能 > 300ms | 中 | "先开口"策略（先合成短前缀），后续部分流式追加 |
 | 多人同声场景下声纹不稳定 | 中 | 需 Perception 提供视觉对齐（人脸 + lip sync） |
 | 隐私模式下 LLM 能力受限（端侧 1.5B 较弱） | 中 | 能力公示给用户，可由用户主动切回标准模式 |
-| 语音 E-Stop 与触觉 E-Stop 同时触发的优先级 | 低 | SM 内已有 E-Stop 仲裁优先级表，按既有规则即可（触觉 ≥ 语音 ≥ APP） |
-| 自体 TTS 唤醒抑制窗（100ms）是否足够 | 中 | 与 AEC 收敛时间联动；TTS 播放期间将 KWS_RT 阈值临时上调 0.05 |
+| 自体 TTS 唤醒抑制窗（100ms）是否足够 | 中 | 与 AEC 收敛时间联动；TTS 播放期间将 KWS 阈值临时上调 0.05 |
 
 ### 11.1 后续工作清单
 
-- [ ] DSP 固件 KWS_RT 关键词集合的语料采集与训练
+- [ ] DSP 固件 KWS 关键词集合的语料采集与训练
 - [ ] RKNN 化端侧 LLM 的 batch=1 推理速度实测
 - [ ] 端侧 ASR 在 24 通道高混响办公室的字错率测试
-- [ ] estop_voice_service 在 Linux PREEMPT_RT 内核下的真实延迟分布测量
 - [ ] 与 Perception 联动的"看着我说话"姿态/凝视加权 KWS 触发实验
 
 ---
@@ -847,7 +737,7 @@ voice_subsystem:
 
 | use_case_04 步骤 | 本子系统涉及组件 |
 |-----------------|----------------|
-| "用户语音唤醒" | §3 + §6（如果是"停止"则走 KWS_RT） |
+| "用户语音唤醒" | §3 |
 | "ASR 转文本" | §5.4 ASR + §5.5 端云策略 |
 | "Interaction 意图理解" | §5.1 + Interaction 模块文档 |
 | "Agent 推理规划" | §5.5 LLM + Agent 模块文档 |
@@ -857,4 +747,4 @@ voice_subsystem:
 
 | 日期 | 版本 | 变更 |
 |------|------|------|
-| 2026-05-07 | v1.0 | 初版：含中等深度硬件方案 + 独立 KWS→SM E-Stop 通道 |
+| 2026-05-07 | v1.0 | 初版：含中等深度硬件方案 |

@@ -1,0 +1,14 @@
+flowchart TD
+    A["TE 开始执行 Agent 提交的任务"] --> B["Agent 订阅 /te/task_state"]
+    B --> C{"任务进度更新"}
+    C -->|进度正常| D["不打扰用户"]
+    C -->|需要用户确认| E["调用 ask_user 技能"]
+    C -->|任务失败| F["LLM 重新规划
+重试/换方案/报告用户"]
+    D --> G["任务完成"]
+    E --> G
+    F --> G
+    G --> H["发布 /agent/agent_response
+'已经放好了'"]
+    G --> I["更新长期记忆
+任务成功模式"]

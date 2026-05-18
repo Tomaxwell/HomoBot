@@ -1,12 +1,15 @@
 ms_node:
   ros__parameters:
-    output_frequency_hz: 100.0
-    max_velocity: 10.0
-    max_acceleration: 50.0
-    max_jerk: 200.0
-    max_buffer_depth: 100
+    # Device polling rate (Hz) — how often to read VR/mocap device frame
+    device_poll_rate_hz: 60.0
+
+    # State broadcast rates (Hz)
+    teleop_state_rate_hz: 10.0
+    device_state_rate_hz: 10.0
     heartbeat_rate_hz: 1.0
-    statistics_rate_hz: 1.0
-    default_interpolation: 3  # MIN_JERK
-    enable_priority_arbitration: true
-    enable_rate_limiting: true
+
+    # Tracking quality threshold [0.0, 1.0] — below this, frames are dropped
+    tracking_quality_threshold: 0.5
+
+    # Max consecutive dropped frames before entering ERROR state
+    max_dropped_frames: 30

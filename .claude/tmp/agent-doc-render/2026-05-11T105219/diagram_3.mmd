@@ -1,0 +1,40 @@
+flowchart TB
+    subgraph AgentNode["AgentNode"]
+        subgraph AgentCore["Agent Core"]
+            direction LR
+            MR["Message Router
+消息路由器
+- 分类消息
+- 路由处理"]
+            CB["Context Builder
+上下文构建器
+- 拼接上下文
+- 注入技能"]
+            LLMP["LLM Provider
+本地/云端"]
+            TE["Tool Executor
+工具执行器
+- 解析工具调用
+- 调用技能
+- 收集结果"]
+            MR --> CB --> LLMP
+            LLMP --> TE
+            TE --> LLMP
+        end
+
+        SR["Skill Registry
+技能注册表"]
+        MM["Memory Manager
+记忆管理"]
+        CFG["Config Manager
+参数管理"]
+        ROS2["ROS2 Interface Layer
+- Subscribers
+- Publishers
+- Service/Action"]
+    end
+
+    AgentCore --> SR
+    AgentCore --> MM
+    AgentCore --> CFG
+    AgentCore --> ROS2

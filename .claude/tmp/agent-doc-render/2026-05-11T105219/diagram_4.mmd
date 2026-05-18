@@ -1,0 +1,24 @@
+flowchart TD
+    A["Gateway 发布 /gateway/user_command
+'帮我把红色杯子放到桌上'"] --> B["Agent 接收消息"]
+    B --> C["Message Router 分类
+用户指令 → 进入 Agent Loop"]
+    C --> D["Context Builder 构建上下文
+- 系统提示词
+- 长期记忆
+- 会话历史
+- 环境快照"]
+    D --> E["LLM 推理（第 1 轮）
+决定调用 perceive 技能"]
+    E --> F["Tool Executor 执行 perceive
+调用 Perception Service
+查询红色杯子位置"]
+    F --> G["LLM 推理（第 2 轮）
+决定调用 dispatch_task 技能"]
+    G --> H["Tool Executor 执行 dispatch_task
+发布 /agent/task_proposal
+TE 接收并调度执行"]
+    H --> I["LLM 推理（第 3 轮）
+生成自然语言响应"]
+    I --> J["发布 /agent/agent_response
+'好的，我这就去把红色杯子放到桌上'"]

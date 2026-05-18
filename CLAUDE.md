@@ -32,7 +32,7 @@
 | UC | Upper Body Control | 上肢运动控制（IK/轨迹规划/力控/夹爪，MC插件） |
 | LC | Lower Body Control | 下肢运动控制（足式RL/WBC/步态；轮式底盘/升降柱，MC插件） |
 | MP | Motion Player | 动作播放（预录动作序列） |
-| MS | Motion Streamer | 动作流（运动指令流式整形与调度） |
+| MS | Motion Streamer | 动作流（VR/动捕服数据接入与运动重定向） |
 | PnC | Planning and Control | 规划控制（路径规划 + 行走控制信号输出） |
 | Perception | Perception | 感知融合（视觉 + Lidar） |
 | VSLAM | Vision SLAM | 视觉建图定位（从HAL_Sensor接Camera） |
@@ -143,6 +143,7 @@
 ## 已完成设计
 
 ### Claude Code 设计
+- [Interaction Cloud](design/layer_00_cloud/interaction_cloud_design.md) — 交互云架构设计（CloudLLM/RAG/知识库/多模态云服务）
 
 - [Agent](design/layer_01_ai/agent_design.md) — VLA具身智能体（LLM Agent + Skills + 记忆）
 - [Task Engine (TE)](design/layer_01_ai/te_design.md) — 任务调度与执行（含VLA任务类型）
@@ -160,7 +161,7 @@
 - [Upper Body Control (UC)](design/layer_05_motion/uc_design.md) — 上肢运动控制（IK/轨迹规划/末端力控/夹爪，MC插件）
 - [Lower Body Control (LC)](design/layer_05_motion/lc_design.md) — 下肢运动控制（足式RL/WBC/步态；轮式底盘/升降柱，MC插件）
 - [Motion Player (MP)](design/layer_05_motion/mp_design.md) — 动作播放（预录动作序列执行）
-- [Motion Streamer (MS)](design/layer_05_motion/ms_design.md) — 动作流（运动指令流式整形与调度）
+- [Motion Streamer (MS)](design/layer_05_motion/ms_design.md) — 动作流（VR/动捕服数据接入与运动重定向）
 - [State Manager (SM)](design/layer_06_middleware/sm_design.md) — 全局状态机（17状态，足式人形模式扩充）
 - [Executive Manager (EM)](design/layer_06_middleware/em_design_v2.md) — 进程生命周期治理
 - [Gateway](design/layer_06_middleware/gateway_design.md) — 端侧网关（云端/APP通信唯一出口）

@@ -1,0 +1,13 @@
+flowchart TD
+    SP["System Prompt
+角色定义 + 安全约束 + 可用技能列表"]
+    LM["Long-term Memory
+相关的历史任务/偏好"]
+    SH["Session History
+当前对话的最近 N 轮"]
+    ES["Environment Snapshot
+当前机器人状态、感知结果摘要"]
+    CM["Current Message
+用户当前指令"]
+
+    SP --> LM --> SH --> ES --> CM

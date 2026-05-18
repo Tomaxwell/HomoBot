@@ -844,7 +844,7 @@ lc_wheeled:
   # 安全
   chassis_brake_response_ms: 30       # 机械刹车响应时间：电机失能 → 刹车完全抱死 [ms]
                                       # PnC 停止预算（100ms）= 通信延迟 + 刹车响应 + 控制周期抖动
-                                      # LC 保证刹车响应 < 50ms，其余由 PnC/Motion Streamer 预留
+                                      # LC 保证刹车响应 < 50ms，其余由 PnC 预留
 ```
 
 ---

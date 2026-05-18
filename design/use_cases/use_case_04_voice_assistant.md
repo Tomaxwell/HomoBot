@@ -33,7 +33,6 @@ sequenceDiagram
     participant SM as State Manager
     participant PnC as PnC
     participant Perception as Perception
-    participant MS as Motion Streamer
     participant MC as Motion Control
     participant UC as Upper Body Control
     participant LC as Lower Body Control
@@ -68,8 +67,7 @@ sequenceDiagram
     Agent->>Perception: 请求检测水杯
     Perception-->>Agent: 水杯位置+位姿
 
-    Agent->>MS: 发送抓取轨迹
-    MS->>MC: 整形后运动指令
+    Agent->>MC: 发送抓取运动目标
     MC->>UC: 转发电臂控制指令
     UC->>UC: IK求解+轨迹跟踪+力控闭环
     UC-->>MC: 上肢关节指令
@@ -87,8 +85,7 @@ sequenceDiagram
     MC->>HAL_EtherCAT: 统一下发全身关节指令
 
     PnC-->>TE: 到达用户处
-    Agent->>MS: 发送递送轨迹
-    MS->>MC: 递送动作
+    Agent->>MC: 发送递送运动目标
     MC->>UC: 转发电臂递送指令
     UC->>UC: 递送轨迹执行+力控感知用户接取
     UC-->>MC: 上肢关节指令
@@ -111,13 +108,12 @@ sequenceDiagram
 |------|--------------|----------|
 | **HAL_Audio** | 唤醒词检测、ASR 转写、TTS 合成播放 | Interaction |
 | **Interaction** | 语音意图理解、对话状态管理、多轮交互仲裁、TTS 请求下发 | HAL_Audio, Agent, TE, MP |
-| **Agent** | 自然语言理解 → 任务拆解 → 环境感知查询 → 抓取策略生成 | Interaction, TE, Perception, SM, MS |
-| **TE** | 调度"导航→找物→抓取→返回→递送"子任务链 | Agent, SM, PnC, MS, MP |
-| **SM** | 管理站立/行走/抓取状态切换 | TE, PnC, MS, MC |
+| **Agent** | 自然语言理解 → 任务拆解 → 环境感知查询 → 抓取策略生成 | Interaction, TE, Perception, SM, MC |
+| **TE** | 调度"导航→找物→抓取→返回→递送"子任务链 | Agent, SM, PnC, MP, MC |
+| **SM** | 管理站立/行走/抓取状态切换 | TE, PnC, MC |
 | **PnC** | 家庭环境导航（窄门、家具避让） | TE, MC, Perception, VSLAM |
 | **Perception** | 家庭物品检测与位姿估计（水杯、遥控器、药瓶等） | Agent, PnC, HAL_Sensor |
-| **MS** | 手臂抓取/递送轨迹整形 | Agent, MC |
-| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合全身关节指令，统一下发 EtherCAT | UC, LC, MS, PnC, HAL_EtherCAT |
+| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合全身关节指令，统一下发 EtherCAT | UC, LC, PnC, HAL_EtherCAT |
 | **UC** | 上肢控制插件：执行双臂 IK、轨迹跟踪、末端力控（递送时感知用户接取） | MC, HAL_EtherCAT |
 | **LC** | 下肢控制插件（足式）：执行站立/行走步态、RL 策略、WBC 平衡计算 | MC, PnC, HAL_EtherCAT |
 | **MP** | 播放社交动作（点头、挥手）增强交互感 | Interaction, MC |
@@ -139,9 +135,8 @@ sequenceDiagram
 | `/interaction/interaction_event` | Interaction | Agent | 结构化交互事件 |
 | `/agent/task_plan` | Agent | TE | 任务计划提交 |
 | `/perception/object_detection` | Perception | Agent | 物品检测结果 |
-| `/sm/robot_state` | SM | TE, PnC, MC, MS | 全局状态 |
+| `/sm/robot_state` | SM | TE, PnC, MC | 全局状态 |
 | `/pnc/cmd_vel` | PnC | MC | 家庭环境导航 |
-| `/ms/arm_stream` | MS | MC | 手臂运动指令 |
 
 ### Service 调用
 
@@ -164,25 +159,19 @@ sequenceDiagram
 
 ## 5. 安全约束
 
-### E-Stop 路径
+### 安全约束
 
-```
-用户紧急语音("停止"/"别动") → HAL_Audio → Interaction → SM → ACTIVE_E_STOP
-                                              ↓
-                                        MC 立即停止运动
-```
-
-- 语音 E-Stop 指令具有最高优先级：Interaction 识别到"停止"、"别动"、"危险"等紧急词汇时，直接调用 SM 的 E-Stop 接口（不走 Agent 推理，避免 LLM 延迟）
+- Interaction 识别到"停止"、"别动"、"危险"等紧急词汇时，通过 Interaction → Gateway 或本地安全策略处理，不走 LLM 推理（避免 LLM 延迟）
 - 递送物品时，UC 力控检测用户是否接过物品（力突变），未检测到时保持递送姿态不松手
 
 ### SM 状态校验
 
 | 操作 | 要求状态 | 禁止状态 |
 |------|----------|----------|
-| 响应语音指令 | `ACTIVE_STAND` 或 `ACTIVE_WALKING` | `ACTIVE_E_STOP` |
-| 室内行走 | `ACTIVE_WALKING` | `FAULT`, `ACTIVE_E_STOP`, `CHARGING` |
-| 抓取物品 | `ACTIVE_MOTION` | `FAULT`, `ACTIVE_E_STOP` |
-| 递送物品 | `ACTIVE_MOTION` | 全部非运动状态 |
+| 响应语音指令 | `ACTIVE` | `FAULT`, `SHUTTING_DOWN` |
+| 室内行走 | `ACTIVE`（MC 运动模式由 MC 自行管理）| `FAULT`, `CHARGING`, `SHUTTING_DOWN` |
+| 抓取物品 | `ACTIVE`（MC 运动模式由 MC 自行管理）| `FAULT`, `SHUTTING_DOWN` |
+| 递送物品 | `ACTIVE`（MC 运动模式由 MC 自行管理）| 全部非 `ACTIVE` 状态 |
 
 ### 隐私安全
 
@@ -220,6 +209,6 @@ sequenceDiagram
 
 1. **Agent** 请求 Perception 检测水杯，返回 `occluded`
 2. **Agent** 规划调整视角（侧身、蹲下、换角度）
-3. **MS/MC/UC** 执行视角调整动作
+3. **MC/UC** 执行视角调整动作
 4. 重新检测仍找不到 → Agent 向 Interaction 请求语音反馈："找不到水杯，可能被人拿走了"
 5. **TE** 标记子任务失败，向用户确认是否继续

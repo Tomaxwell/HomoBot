@@ -1,0 +1,7 @@
+# 查询设备状态
+
+string device_id
+---
+bool success
+DeviceState[] devices
+uint32 count

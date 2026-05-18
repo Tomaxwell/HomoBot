@@ -20,10 +20,10 @@
 |------|---------|---------|
 | MC ↔ SM | 订阅状态缓存、运动前校验、触发 E-Stop | 全局状态机决策、状态转换仲裁 |
 | MC ↔ HAL_EtherCAT | 聚合 UC/LC 指令后统一输出、接收关节原始状态 | EtherCAT 通信、从站管理 |
-| MC ↔ UC | 提供基座/质心状态、下发上肢运动指令、接收上肢关节输出 | IK/轨迹规划/末端力控/夹爪/避自碰 |
-| MC ↔ LC | 提供基座/质心状态、下发下肢运动指令、接收下肢关节输出 | 足式: RL/WBC/步态; 轮式: 底盘+升降柱 |
+| MC ↔ UC | 提供基座/质心状态、下发上肢运动指令、接收上肢关节输出 | IK/轨迹规划/末端力控/夹爪/避自碰/轨迹平滑/速度限幅 |
+| MC ↔ LC | 提供基座/质心状态、下发下肢运动指令、接收下肢关节输出 | 足式: RL/WBC/步态/轨迹平滑/速度限幅; 轮式: 底盘+升降柱/轨迹平滑 |
 | MC ↔ PnC | 接收行走/移动控制信号 | 路径规划、导航决策 |
-| MC ↔ MS | 接收流式运动意图 | 运动指令流式整形 |
+| MC ↔ MS | 接收重定向后的关节目标 | VR/动捕服数据接入与运动重定向 |
 | MC ↔ MP | 接收预录动作序列 | 动作序列管理、插值 |
 | MC ↔ TE | 接收任务级运动指令（通过 Action） | 任务调度、生命周期管理 |
 | MC ↔ HDS | 上报关节健康数据、插件健康状态、失效诊断 | 故障诊断与定级 |
@@ -450,7 +450,7 @@ string current_phase           # 当前执行阶段
 | `/pnc/velocity_command` | `geometry_msgs/msg/Twist` | PnC | Best Effort, Depth 1 | 100Hz | 行走/移动控制信号 |
 | `/perception/terrain_info` | `perception_msgs/msg/TerrainInfo` | Perception | Best Effort, Depth 1 | 50Hz | 地形信息（可选）|
 | `/mc/motion_target` | `mc_msgs/msg/MotionTarget` | MP | Reliable + Volatile, Depth 1 | 30-60Hz | 预录动作逐帧关节目标 |
-| `/ms/motion_target` | `ms_msgs/msg/StreamMotionTarget` | MS | Reliable + Volatile, Depth 1 | 100Hz | 流式整形后关节目标 |
+| `/ms/motion_target` | `mc_msgs/msg/MotionTarget` | MS | Best Effort + Volatile, Depth 1 | 100Hz | VR/动捕重定向后的关节目标 |
 
 #### Services
 
@@ -781,7 +781,7 @@ MC 实时线程每周期读取 `LowerBodyStatus`，监测 LC 插件上报的状�
 #### 4.4.7 MP/MS 外部关节目标处理流程
 
 ```
-MP 插值生成一帧关节目标 / MS 整形输出一帧关节目标
+MP 插值生成一帧关节目标 / MS 重定向输出一帧关节目标
   → 发布到 /mc/motion_target（MP）或 /ms/motion_target（MS）
   → MC ROS2 回调线程收到消息
   → 写入无锁环形缓冲区（实时线程可读）
@@ -798,6 +798,12 @@ MP 插值生成一帧关节目标 / MS 整形输出一帧关节目标
 
 > **注意**：MotionTarget 覆盖期间，插件仍运行以维护内部状态估计和末端位姿计算。
 > 当 MotionTarget 流结束（MP 播放完成 / MS 流停止），插件无缝接管控制。
+>
+> **MS 关节目标的平滑处理**：MS 输出的关节目标是重定向后的原始值（未经平滑），MC 在 MotionTarget 覆盖阶段由 UC/LC 插件负责：
+> - 轨迹平滑：对 MotionTarget 做低通滤波或样条插值，消除抖动
+> - 速度/加速度限幅：限制关节速率变化，确保物理可行性
+> - 软过渡：MotionTarget 切换时做渐变，避免阶跃
+> - 硬保护：Safety Guardian 做关节限位裁剪和力矩饱和检查（最后一道防线）
 ```
 
 ---
@@ -816,7 +822,7 @@ MP 插值生成一帧关节目标 / MS 整形输出一帧关节目标
 | UC | MC ↔ UC | 插件接口（共享内存） | 基座状态、上肢指令、末端状态 |
 | LC | MC ↔ LC | 插件接口（共享内存） | 基座状态、下肢指令、步态/底盘状态 |
 | PnC | PnC → MC | `/pnc/velocity_command` (Topic) | 行走/移动控制信号 |
-| MS | MS → MC | `/ms/motion_target` (Topic) | 流式整形后关节目标 |
+| MS | MS → MC | `/ms/motion_target` (Topic) | VR/动捕重定向后的关节目标 |
 | MP | MP → MC | `/mc/motion_target` (Topic) | 预录动作逐帧关节目标 |
 | TE | TE → MC | `/mc/execute_motion` (Action) | 任务级运动指令（直接调用）|
 | TE | TE → MC | `/mc/set_motion_mode` (Service) | 切换运动模式 |

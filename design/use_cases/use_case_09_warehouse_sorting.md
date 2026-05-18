@@ -35,7 +35,6 @@ sequenceDiagram
     participant PnC as PnC
     participant Perception as Perception
     participant MapManager as MapManager
-    participant MS as Motion Streamer
     participant MC as Motion Control
     participant UC as Upper Body Control
     participant LC as Lower Body Control
@@ -59,8 +58,7 @@ sequenceDiagram
         Agent->>Perception: 请求SKU识别与定位
         Perception-->>Agent: bbox+6DoF+SKU匹配
 
-        Agent->>MS: 发送抓取轨迹
-        MS->>MC: 整形后运动
+        Agent->>MC: 发送抓取运动目标
         MC->>UC: 上肢操作指令
         UC->>HAL_EtherCAT: 执行抓取(力控闭环)
         HAL_EtherCAT-->>UC: 力反馈(抓取确认)
@@ -68,8 +66,7 @@ sequenceDiagram
         Agent->>Perception: 请求扫码确认
         Perception-->>Agent: SKU校验OK
 
-        Agent->>MS: 放置至分拣筐
-        MS->>MC: 放置动作
+        Agent->>MC: 发送放置运动目标(分拣筐)
         MC->>UC: 上肢放置指令
         UC->>HAL_EtherCAT: 执行放置
         DR->>DR: 记录分拣事件
@@ -91,13 +88,12 @@ sequenceDiagram
 |------|--------------|----------|
 | **Gateway** | 接收 WMS 波次任务；回传分拣结果与库存状态 | TE, WMS, HDS |
 | **TE** | 管理分拣波次；调度"移动→识别→抓取→放置→确认"循环 | Gateway, SM, Agent, PnC, DR |
-| **SM** | 状态切换：`ACTIVE_WALKING`（货架间）↔ `ACTIVE_MOTION`（抓取） | TE, PnC, MS, MC |
-| **Agent** | 分拣路径优化；SKU 识别策略；抓取姿态规划 | TE, Perception, MapManager, MS |
+| **SM** | 状态切换：`ACTIVE_WALKING`（货架间）↔ `ACTIVE_MOTION`（抓取） | TE, PnC, MC |
+| **Agent** | 分拣路径优化；SKU 识别策略；抓取姿态规划 | TE, Perception, MapManager, MC |
 | **PnC** | 仓储大规模导航（高货架、窄通道、叉车共行） | TE, MC, Perception, VSLAM, MapManager |
 | **Perception** | SKU 商品识别（在相似包装中区分目标）；扫码/RFID | Agent, HAL_Sensor, TF |
 | **MapManager** | 仓储货架地图；动态更新货架占用状态 | Agent, PnC, VSLAM |
-| **MS** | 手臂抓取/放置轨迹整形 | Agent, MC |
-| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合关节指令，统一下发 EtherCAT | MS, PnC, UC, LC, HAL_EtherCAT |
+| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合关节指令，统一下发 EtherCAT | PnC, UC, LC, HAL_EtherCAT |
 | **UC** | 上肢控制插件：执行双臂操作、力控、夹爪控制 | MC, HAL_EtherCAT |
 | **LC** | 下肢控制插件：执行底盘移动/足式行走 | MC, HAL_EtherCAT |
 | **DR** | 分拣过程数据记录（用于复核与优化） | TE, Agent, Perception |
@@ -113,11 +109,10 @@ sequenceDiagram
 
 | Topic | 发布者 | 订阅者 | 说明 |
 |-------|--------|--------|------|
-| `/sm/robot_state` | SM | PnC, MC, MS | 全局状态 |
+| `/sm/robot_state` | SM | PnC, MC | 全局状态 |
 | `/pnc/cmd_vel` | PnC | MC | 行走控制 |
 | `/perception/sku_detection` | Perception | Agent | SKU 识别结果 |
 | `/perception/barcode_scan` | Perception | Agent | 扫码结果 |
-| `/ms/arm_stream` | MS | MC | 手臂运动指令 |
 | `/dr/sort_event` | DR | Gateway | 分拣事件记录 |
 | `/hds/health_status` | HDS | Gateway | 健康状态 |
 
@@ -135,7 +130,6 @@ sequenceDiagram
 |--------|--------|--------|------|
 | `/te/execute_sort_wave` | Gateway | TE | 分拣波次执行 |
 | `/pnc/navigate_to` | TE | PnC | 货架间导航 |
-| `/ms/grasp_stream` | Agent | MS | 连续抓取运动流 |
 
 ---
 

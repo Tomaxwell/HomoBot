@@ -34,7 +34,6 @@ sequenceDiagram
     participant PnC as PnC
     participant Perception as Perception
     participant MapManager as MapManager
-    participant MS as Motion Streamer
     participant MC as Motion Control
     participant UC as Upper Body Control
     participant LC as Lower Body Control
@@ -63,8 +62,7 @@ sequenceDiagram
             Agent->>Interaction: 请求人工确认(TTS播报)
             Interaction->>HAL_Audio: 播放"请确认XX商品位置"
         else 识别成功
-            Agent->>MS: 发送抓取轨迹
-            MS->>MC: 整形后轨迹
+            Agent->>MC: 发送抓取运动目标
             MC->>UC: 转发电臂控制指令
             UC->>UC: IK求解+轨迹跟踪+力控闭环
             UC-->>MC: 上肢关节指令
@@ -77,8 +75,7 @@ sequenceDiagram
             Perception-->>Agent: SKU校验OK
         end
 
-        Agent->>MS: 发送放置轨迹(配送箱)
-        MS->>MC: 放置动作
+        Agent->>MC: 发送放置运动目标(配送箱)
         MC->>UC: 转发电臂放置指令
         UC->>UC: 放置轨迹执行
         UC-->>MC: 上肢关节指令
@@ -102,14 +99,13 @@ sequenceDiagram
 | 模块 | 本场景中的职责 | 协作对象 |
 |------|--------------|----------|
 | **Gateway** | 接收 WMS 订单，回传拣货结果与库存状态 | TE, WMS, HDS |
-| **TE** | 管理订单级任务，编排"移动→识别→抓取→放置"循环 | Gateway, SM, Agent, PnC, MS |
-| **SM** | 状态管理：`ACTIVE_WALKING`（货架间）↔ `ACTIVE_MOTION`（抓取时） | TE, PnC, MS, MC |
-| **Agent** | 路径规划优化、商品识别策略、抓取姿态生成 | TE, Perception, PnC, MapManager, MS |
+| **TE** | 管理订单级任务，编排"移动→识别→抓取→放置"循环 | Gateway, SM, Agent, PnC, MC |
+| **SM** | 状态管理：`ACTIVE_WALKING`（货架间）↔ `ACTIVE_MOTION`（抓取时） | TE, PnC, MC |
+| **Agent** | 路径规划优化、商品识别策略、抓取姿态生成 | TE, Perception, PnC, MapManager, MC |
 | **PnC** | 商超环境导航（窄通道、人流/货架动态障碍） | TE, MC, Perception, VSLAM, MapManager |
 | **Perception** | SKU 商品识别（在相似包装中区分目标）；扫码/RFID | Agent, HAL_Sensor, TF |
 | **MapManager** | 提供货架布局地图、商品位置索引 | Agent, PnC, VSLAM |
-| **MS** | 手臂抓取轨迹整形，确保在货架前不碰撞周边商品 | Agent, MC, SM |
-| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合全身关节指令，统一下发 EtherCAT | UC, LC, MS, PnC, HAL_EtherCAT |
+| **MC** | 运动控制协调器：加载 UC/LC 插件，聚合全身关节指令，统一下发 EtherCAT | UC, LC, PnC, HAL_EtherCAT |
 | **UC** | 上肢控制插件：执行双臂 IK、轨迹跟踪、末端力控、自碰撞规避 | MC, HAL_EtherCAT |
 | **LC** | 下肢控制插件（轮式）：轮式底盘驱动、升降柱控制 | MC, PnC, HAL_EtherCAT |
 | **Interaction** | 商品识别失败时语音求助；拣货进度语音播报 | Agent, HAL_Audio |
@@ -125,11 +121,10 @@ sequenceDiagram
 
 | Topic | 发布者 | 订阅者 | 说明 |
 |-------|--------|--------|------|
-| `/sm/robot_state` | SM | PnC, MC, MS | 全局状态 |
+| `/sm/robot_state` | SM | PnC, MC | 全局状态 |
 | `/pnc/cmd_vel` | PnC | MC | 轮式底盘控制 |
 | `/perception/sku_detection` | Perception | Agent | SKU 识别结果（含置信度） |
 | `/perception/barcode_scan` | Perception | Agent | 扫码/RFID 结果 |
-| `/ms/arm_stream` | MS | MC | 手臂运动指令 |
 | `/interaction/tts_request` | Interaction | HAL_Audio | TTS 播报请求 |
 | `/hds/health_status` | HDS | Gateway | 健康状态 |
 
@@ -147,7 +142,6 @@ sequenceDiagram
 |--------|--------|--------|------|
 | `/te/execute_order` | Gateway | TE | 订单级拣货任务 |
 | `/pnc/navigate_to` | TE | PnC | 导航至货架/打包区 |
-| `/ms/grasp_stream` | Agent | MS | 连续抓取运动流 |
 
 ---
 

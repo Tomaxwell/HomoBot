@@ -1,0 +1,8 @@
+# 停止遥操会话
+
+string session_id
+bool emergency
+---
+bool stopped
+uint16 error_code
+string message

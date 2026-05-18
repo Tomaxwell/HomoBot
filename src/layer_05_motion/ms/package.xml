@@ -3,15 +3,16 @@
 <package format="3">
   <name>ms</name>
   <version>0.1.0</version>
-  <description>Motion Streamer module for humanoid robot</description>
+  <description>Motion Streamer — VR/mocap data ingestion and human-to-robot motion retargeting</description>
   <maintainer email="dev@striding.ai">Striding Robotics</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
   <depend>std_msgs</depend>
-  <depend>geometry_msgs</depend>
+  <depend>builtin_interfaces</depend>
   <depend>ms_msgs</depend>
   <depend>mc_msgs</depend>
   <depend>sm_msgs</depend>

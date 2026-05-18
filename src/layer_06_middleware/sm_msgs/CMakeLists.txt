@@ -18,9 +18,6 @@ set(msg_files
 set(srv_files
   "srv/RequestTransition.srv"
   "srv/GetState.srv"
-  "srv/TriggerEStop.srv"
-  "srv/VoiceEStop.srv"
-  "srv/ReleaseEStop.srv"
   "srv/AcknowledgeFault.srv"
   "srv/IsMotionAllowed.srv"
   "srv/GetHealthStatus.srv"

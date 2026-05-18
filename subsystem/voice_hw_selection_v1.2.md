@@ -160,7 +160,7 @@ RK3588 内置音频接口（I2S/PDM）不含硬件 AEC。AEC 若在 SoC 上软�
 - 系统负载尖峰时 AEC 收敛失败 → 自激振铃
 - 步行/电机噪声叠加 → 软件 AEC 适配工作量大幅增加
 
-独立 DSP 把 AEC/BF/NS/KWS_RT 全部固化为硬实时任务，与 SoC 完全解耦。
+独立 DSP 把 AEC/BF/NS/唤醒词检测全部固化为硬实时任务，与 SoC 完全解耦。
 
 **v1.2 扩展候选池（横向对比）**
 
@@ -184,8 +184,8 @@ RK3588 内置音频接口（I2S/PDM）不含硬件 AEC。AEC 若在 SoC 上软�
 |---------|---------------|
 | 现货可获得性 | ✅ 2026 Q2 量产稳定，国内有代理 |
 | AEC 算法成熟度 | ✅ 官方库 + 大量参考设计（Amazon Alexa Voice Service 认证）|
-| 端侧 KWS 可固化 | ✅ DS-CNN ~100KB，永不更新，签名审核（满足急停安全约束）|
-| 与 RK3588 通信 | ✅ I2S TDM 8-slot + UART 急停带外通道 |
+| 端侧 KWS 可固化 | ✅ DS-CNN ~100KB，永不更新，签名审核 |
+| 与 RK3588 通信 | ✅ I2S TDM 8-slot + UART 控制通道 |
 | 工具链 | ✅ XMOS xTIMEcomposer + TensorFlow Lite Micro |
 | 国产替代风险 | ⚠️ 英国厂商，需考虑 BOM 替代方案 |
 
@@ -199,11 +199,9 @@ RK3588 内置音频接口（I2S/PDM）不含硬件 AEC。AEC 若在 SoC 上软�
 | 波束成形（BF） | MVDR/GSC，指向主说话人方向 |
 | 声学回声消除（AEC） | 8-tap NLMS，参考信号取自扬声器 I2S 回环 |
 | 噪声抑制 + AGC | 抑制电机/步行噪声 |
-| **KWS_RT**（急停专用）| DS-CNN ~100KB，固化关键词："停止/别动/危险/help"，**永不更新，经签名审核** |
-| 双路 VAD | 一路给 KWS_RT，一路给 SoC 侧 ASR |
-| **GPIO + UART 急停带外通道** | KWS_RT 命中 → GPIO IRQ + UART 帧通知 SM，**绕过 ROS2 DDS**，端到端 ≤ 200ms |
+| 双路 VAD | 一路给唤醒词检测，一路给 SoC 侧 ASR |
 
-> **安全红线落实**：急停链路 XMOS → SM → MC 必须独立 CallbackGroup，与 ROS2 主调度解耦。这是项目 CLAUDE.md 中 **"E-Stop路径必须独立CallbackGroup"** 的硬件层落地方式。
+> **安全红线落实**：唤醒词检测链路 XMOS → SoC 必须独立 CallbackGroup，与 ROS2 主调度解耦。这是项目 CLAUDE.md 中 **"关键实时路径必须独立 CallbackGroup"** 安全原则在硬件层的落地方式。
 
 ### 3.6 Audio Codec / 功放选型 `[行业通用]`
 
@@ -426,7 +424,7 @@ CosyVoice-Light：
 
 **主路线**：**XMOS XU316-1024**（80.0 分）
 **国产替代第二供应商**：**启英泰伦 CI135X**（76.0 分，仅低 4 分但单价 1/5、政治替代风险最低）
-**禁止使用**：ESP32-S3（AEC 软件实现，不满足急停带外通道安全要求）
+**禁止使用**：ESP32-S3（AEC 软件实现，质量不达标）
 
 ### 8.4 双供应商策略
 
@@ -436,7 +434,7 @@ CosyVoice-Light：
 | 试产（2026 Q4）| XMOS XU316 | 启英泰伦 CI135X 适配评估 |
 | 量产（2027 Q2）| 双供应商，按可获得性切换 | 切换工作量目标 ≤ 4 周 |
 
-**双供应商接口约束**：定义统一的 DSP↔SoC 协议（I2S TDM 8-slot + UART 急停帧格式），两个 DSP 实现必须满足同一协议，HAL_Audio 抽象层不感知具体型号。
+**双供应商接口约束**：定义统一的 DSP↔SoC 协议（I2S TDM 8-slot + UART 控制帧格式），两个 DSP 实现必须满足同一协议，HAL_Audio 抽象层不感知具体型号。
 
 ---
 
@@ -447,9 +445,8 @@ CosyVoice-Light：
 | RK3588 NPU ASR + TTS 分时是否产生优先级抢占 | RKNN Multi-context 压力测试 | 无反转，TTS 首包 ≤ 300ms | 🔲 待执行 |
 | XMOS XU316 AEC 在步行振动下的 ERLE 稳定性 | 步行 + TTS 同时播放，测 AEC 收敛 | ERLE ≥ 25 dB | 🔲 待执行 |
 | CosyVoice-Light RKNN INT8 量化后 MOS 衰减 | 主观 MOS 评分 N=10 | MOS ≥ 4.0 | 🔲 待执行 |
-| GPIO 急停端到端延迟（XMOS → SM）| 注入模拟 KWS 帧，测 SM 时间戳 | ≤ 200ms P99 | 🔲 待执行 |
 | 唤醒词在 SNR = -5 dB 下的唤醒率 | MUSAN 噪声库测试 | ≥ 90% | 🔲 待执行 |
-| 启英泰伦 CI135X 适配可行性 | 移植 KWS_RT 与急停链路 | 全功能对齐 XU316 | 🔲 待执行 |
+| 启英泰伦 CI135X 适配可行性 | 移植唤醒词链路 | 全功能对齐 XU316 | 🔲 待执行 |
 | 4-Mic 环形阵 DOA 精度 | 转盘测试，每 30° 一个采样点 | DOA 误差 ≤ ±15° | 🔲 待执行 |
 | 无线领夹麦在跨房间场景的 ASR 准确率 | 工厂噪声 70 dBA + 5m 距离 | CER ≤ 8% | 🔲 待执行 |
 
