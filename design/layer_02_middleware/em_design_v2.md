@@ -396,15 +396,321 @@ flowchart TB
 
 #### 5.2.1 Orchestrator（编排引擎）
 
-- 基于 DAG 计算进程启动/停止顺序
-- 支持并行启动无依赖进程
-- 就绪探针（Readiness Probe）：
-  - `tcp`: 检测 TCP 端口是否监听
-  - `port`: 检测 UDP 端口
-  - `topic`: 检测 ROS2 Topic 是否有首帧发布
-  - `custom`: 调用自定义健康检查接口
-- 启动超时（默认 30s）后标记 FAILED，触发 RecoveryEngine
-- **编排前检查**：每次编排前检查 `estop_active` 原子标志位，若为 true 则取消编排
+Orchestrator 是 EM 的**核心编排引擎**，负责将 SM 下发的进程集合指令转化为有序的启动/停止操作。其核心数据结构是有向无环图（DAG），用于建模进程组间的依赖关系。
+
+##### 5.2.1.1 DAG 图模型
+
+**图定义**：
+- **节点（V）**：进程组（group）。编排以组为单位执行，组内进程共享同层启动/停止边界。
+- **有向边（E）**：若进程组 A `depends_on` 进程组 B，则存在有向边 **B → A**，语义为"B 必须先启动并就绪，A 才能开始启动"。
+- **权重**：DAG 边本身无权重。优先级（P0-P3）用于资源抢占和故障响应，不用于拓扑排序。
+
+**启动 DAG 与停止 DAG**：
+- 启动时：沿边的**正向拓扑序**（Kahn 算法，从入度为 0 的节点开始）
+- 停止时：沿边的**反向拓扑序**（从出度为 0 的节点开始，逐层向上）
+
+**示例 DAG**（基于实际项目配置推断的 6 层结构）：
+
+```mermaid
+flowchart TB
+    subgraph L0["Layer 0: 基础设施"]
+        I[iox_roudi<br/>DDS Broker]
+    end
+
+    subgraph L1["Layer 1: HAL"]
+        H1[hal_sensor<br/>hal_ethercat]
+        H2[hal_camera<br/>hal_lidar<br/>hal_audio]
+    end
+
+    subgraph L2["Layer 2: 中间件"]
+        M1[sm<br/>gateway<br/>setting]
+        M2[hds<br/>dynamic_auth]
+    end
+
+    subgraph L3["Layer 3: 平台服务"]
+        P1[task_engine<br/>resource_manager<br/>health_diagnosis]
+        P2[data_recorder<br/>data_exporter]
+    end
+
+    subgraph L4["Layer 4: 感知+地图"]
+        PER[perception<br/>vslam<br/>lidar_slam<br/>map_manager]
+    end
+
+    subgraph L5["Layer 5: 运动+规划"]
+        MOT[mc<br/>uc<br/>lc<br/>mp<br/>ms]
+        PNC[pnc]
+    end
+
+    subgraph L6["Layer 6: AI+交互"]
+        AI[agent<br/>interaction]
+    end
+
+    I --> M1
+    I --> M2
+    H1 --> M1
+    H2 --> PER
+    H1 --> MOT
+    M1 --> P1
+    M1 --> P2
+    M2 --> P1
+    P1 --> PER
+    PER --> PNC
+    PNC --> MOT
+    M1 --> AI
+    PER --> AI
+```
+
+> **参考依据**：`run_agibot.yaml` 的 `default_apps` 有序列表反映了实际项目的启动顺序，其中 `iox_roudi`（DDS 中间件）最先启动，`sm` 作为中间件层核心随后启动，`perception`/`vslam` 等感知模块在 HAL 就绪后启动，运动控制模块在感知就绪后启动。
+
+##### 5.2.1.2 拓扑排序算法（Kahn 算法）
+
+Orchestrator 使用 Kahn 算法进行拓扑排序，核心目标是生成**层级化的并行启动序列**。
+
+**算法伪代码**：
+
+```
+function topological_sort_with_layers(groups):
+    // 1. 构建邻接表和入度表
+    adj = {}    // 邻接表：group -> [下游 groups]
+    indeg = {}  // 入度表：group -> 入度
+    for g in groups:
+        indeg[g.name] = len(g.depends_on)
+        for dep in g.depends_on:
+            adj[dep].append(g.name)
+
+    // 2. 初始化 Layer 0（所有入度为 0 的节点）
+    layers = []
+    current = [g for g in groups if indeg[g.name] == 0]
+
+    // 3. 逐层剥离
+    while current not empty:
+        layers.append(current)
+        next_layer = []
+        for g in current:
+            for downstream in adj[g.name]:
+                indeg[downstream] -= 1
+                if indeg[downstream] == 0:
+                    next_layer.append(downstream)
+        current = next_layer
+
+    // 4. 循环检测
+    if total_processed != len(groups):
+        raise DAG_CYCLE_DETECTED
+
+    return layers
+```
+
+**层级（Layer）定义**：
+
+```
+level(v) = 0                         if indegree(v) = 0
+level(v) = max(level(u)) + 1         for all u where edge u→v exists
+```
+
+**关键特性**：
+- 同一 Layer 内的所有进程组**无相互依赖**，可以**完全并行启动**
+- Layer N 的所有进程必须在 Layer N-1 **全部就绪**后才能启动
+- 拓扑排序结果不唯一，但**层级计算结果是确定性的**（基于最长路径）
+- 最大并行度受 `parallel_max` 配置限制（默认 8），超出时按优先级排队
+
+**停止时的逆拓扑序**：
+
+```
+stop_level(v) = 0                    if outdegree(v) = 0
+stop_level(v) = max(stop_level(u)) + 1  for all u where edge v→u exists
+```
+
+停止时从 `stop_level = 0` 的节点开始，逐层向上停止，确保下游先停、上游后停，避免依赖进程提前消失导致下游崩溃。
+
+##### 5.2.1.3 循环检测
+
+配置加载时，ConfigManager 调用 `DAGValidator` 进行循环检测。
+
+**检测机制**：拓扑排序过程中，如果处理完所有当前入度为 0 的节点后，仍有节点未被处理，则图中存在环。
+
+**错误处理**：
+- 检测到环时，返回 `ERR_CONFIG_INVALID`（错误码 2002）
+- 错误消息包含**环上的节点列表**（如 `"cycle detected: middleware → ops → perception → middleware"`），便于快速定位
+- EM 拒绝加载该配置，保持当前有效配置不变
+- 循环检测在**热重载时同样执行**，防止运行时引入环状依赖
+
+**增量检测**：热重载时只检测变更部分涉及的子图，而非全量重算，降低加载延迟。
+
+##### 5.2.1.4 编排执行状态机
+
+Orchestrator 内部维护一个**编排执行状态机**（注意：这是执行进度状态机，不是业务状态机）：
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> PLANNING : 收到编排请求
+    PLANNING --> LAUNCHING : 差异计算完成
+    LAUNCHING --> PROBING : 当前 Layer 进程已启动
+    PROBING --> NEXT_LAYER : 就绪探针全部通过
+    PROBING --> FAILED : 探针超时 / 进程退出
+    NEXT_LAYER --> LAUNCHING : 还有下一 Layer
+    NEXT_LAYER --> COMPLETE : 所有 Layer 完成
+    LAUNCHING --> COMPLETE : 无进程需启动（空编排）
+    COMPLETE --> IDLE : 清理
+    FAILED --> IDLE : 错误处理完成
+
+    IDLE --> CANCELLING : E-Stop / 抢占请求
+    PLANNING --> CANCELLING : E-Stop / 抢占请求
+    LAUNCHING --> CANCELLING : E-Stop / 抢占请求
+    PROBING --> CANCELLING : E-Stop / 抢占请求
+    CANCELLING --> IDLE : 清理完成
+```
+
+**状态说明**：
+
+| 状态 | 说明 |
+|------|------|
+| `IDLE` | 无正在执行的编排 |
+| `PLANNING` | 计算目标进程集合与当前运行集合的差异 |
+| `LAUNCHING` | 正在启动当前 Layer 的进程 |
+| `PROBING` | 等待当前 Layer 的就绪探针通过 |
+| `NEXT_LAYER` | 当前 Layer 就绪，准备进入下一 Layer |
+| `COMPLETE` | 编排正常完成 |
+| `FAILED` | 编排失败（探针超时、进程退出、循环检测失败等）|
+| `CANCELLING` | 编排被取消（E-Stop 或高优先级请求抢占）|
+
+**编排取消机制**：
+- E-Stop 到达时，Orchestrator **立即从任何状态迁移到 `CANCELLED`**
+- 已启动的进程：按**逆拓扑序**停止
+- 正在启动的进程：发送 **SIGKILL** 强制终止（不等待 SIGTERM 超时）
+- 未启动的进程：直接从计划中移除
+- 取消操作记录到审计日志，包含取消原因、已启动进程列表、未启动进程列表
+
+##### 5.2.1.5 层内并行与超时控制
+
+**层内并行启动**：
+- 同一 Layer 内的所有进程同时发出启动请求
+- em_daemon 并行执行 fork/exec（受 `parallel_max` 限制）
+- 每个进程独立进行就绪探针检测
+- 单个进程失败**不阻塞**同层其他进程（除非 `fail_fast=true`）
+
+**超时策略**：
+
+| 超时类型 | 默认值 | 说明 |
+|----------|--------|------|
+| `startup_timeout_sec` | 30s | 单个进程启动超时 |
+| `layer_timeout_sec` | 30s | 单层启动超时（从发出启动请求到全部就绪） |
+| `orchestration_timeout_sec` | 120s | 整编排超时（从收到 ApplyProcessSet 到 COMPLETE） |
+| `probe_interval_sec` | 1s | 就绪探针轮询间隔 |
+| `probe_timeout_sec` | 5s | 单个探针请求超时 |
+
+**超时后行为**：
+- 单个进程启动超时 → 标记 FAILED，触发 RecoveryEngine（L1/L2）
+- 单层超时 → 根据 `fail_fast` 策略决定
+- 整编排超时 → 标记 `ERR_ORCHESTRATION_TIMEOUT`（2012），中止编排
+
+**部分失败处理**：
+- `fail_fast=true`（默认）：单层内任一进程启动失败时，立即停止整层，标记编排失败
+- `fail_fast=false`：继续启动同层其他进程，记录失败进程列表，编排完成后返回部分成功
+
+##### 5.2.1.6 编排差异计算（Diff Engine）
+
+收到 `ApplyProcessSet` 请求时，Orchestrator **不直接全量启停**，而是计算最小差异：
+
+```
+current_set = ProcessRegistry.get_running_groups()
+target_set = ApplyProcessSet.groups_to_start
+
+to_stop  = current_set - target_set    // 需要停止的组（不在目标中）
+to_start = target_set - current_set    // 需要启动的组（当前未运行）
+unchanged = current_set ∩ target_set   // 保持运行的组
+
+// 停止顺序：to_stop 的逆拓扑序
+stop_order = reverse_topological_sort(to_stop)
+
+// 启动顺序：to_start 的正拓扑序
+start_order = topological_sort(to_start)
+
+// 配置变更检测（热重载场景）
+config_changed = unchanged 中配置哈希发生变化的组
+if config_changed not empty:
+    // 按逆拓扑序停止，再按正拓扑序启动（重启）
+    restart_order_stop = reverse_topological_sort(config_changed)
+    restart_order_start = topological_sort(config_changed)
+```
+
+**示例**：从 STANDBY 进入 ACTIVE_IDLE
+- STANDBY 运行组：`[infra, middleware, ops]`
+- ACTIVE_IDLE 目标组：`[infra, middleware, ops, perception, control, ai]`
+- 差异：`to_stop = []`，`to_start = [perception, control, ai]`
+- 启动顺序（拓扑序）：`perception → control → ai`
+
+**示例**：从 ACTIVE_IDLE 退回到 STANDBY
+- 差异：`to_stop = [perception, control, ai]`，`to_start = []`
+- 停止顺序（逆拓扑序）：`ai → control → perception`
+
+##### 5.2.1.7 就绪探针详细设计
+
+就绪探针用于确认进程**不仅已启动，而且已准备好对外提供服务**。
+
+**探针类型**：
+
+| 类型 | 机制 | 适用场景 |
+|------|------|----------|
+| `tcp` | 连接指定 TCP 端口，成功即就绪 | 网络服务（broker, gateway） |
+| `port` | 检测 UDP 端口是否监听 | UDP 服务 |
+| `topic` | 订阅 ROS2 Topic，收到首帧即就绪 | ROS2 节点（motion_control, perception） |
+| `pid` | 检测到进程 PID 存在（最弱探针） | 简单进程、无网络/ROS 接口的进程 |
+| `custom` | 调用自定义健康检查接口（HTTP/UnixSocket） | 复杂服务（SM, HDS） |
+
+**探针执行流程**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Orch as Orchestrator
+    participant Probe as ProbeRunner
+    participant P as 目标进程
+
+    Orch->>Probe: start_probe(process, config)
+    loop 最多 probe_timeout / probe_interval 次
+        Probe->>P: 执行探针检测
+        P-->>Probe: 结果
+        alt 成功
+            Probe-->>Orch: READY
+        else 失败
+            Probe->>Probe: 等待 probe_interval
+        end
+    end
+    Probe-->>Orch: TIMEOUT（标记 FAILED）
+```
+
+**探针配置**：
+
+```yaml
+readiness_probe:
+  type: "tcp"           # tcp / port / topic / pid / custom
+  port: 1883            # tcp/port 类型必填
+  topic: "/mc/joint_states"  # topic 类型必填
+  timeout: 15           # 探针总超时（秒）
+  interval: 1           # 探针轮询间隔（秒）
+  retries: 3            # 连续失败次数才判定为未就绪
+  custom_endpoint: "/health"  # custom 类型必填
+```
+
+**特殊处理**：
+- `simple=true` 的进程**不执行就绪探针**，启动后即视为就绪
+- control 组进程（如 MC）探针超时缩短为 15s（普通进程 30s），因为运动控制延迟直接影响系统响应
+- 探针检测失败**不直接触发 RecoveryEngine**，先标记为 `DEGRADED`，连续 3 次探针失败后（间隔 1s × 3 = 3s）才触发恢复
+
+##### 5.2.1.8 编排前安全检查
+
+每次编排前，Orchestrator 执行以下**不可绕过**的检查：
+
+1. **`estop_active` 原子标志位**：若为 `true`，立即取消编排，返回 `ERR_ESTOP_ACTIVE`（2014）
+2. **SM 状态校验**：若当前 SM 状态为 `FAULT` 或 `ACTIVE_E_STOP`，拒绝启动运动相关进程组（control、motion_domain 相关），返回 `ERR_FAULT_HALT`（2020）
+3. **配置一致性校验**：检查 ProcessRegistry 中的进程配置哈希与 ConfigManager 中的配置是否一致，不一致时拒绝编排（防止配置变更与编排并发冲突）
+4. **资源预检**：检查目标进程组的资源限制配置（cpuset、mem_limit）是否与系统当前可用资源冲突
+
+**编排取消后恢复**：
+- E-Stop 解除后，SM 重新下发 `ApplyProcessSet`
+- Orchestrator 从 IDLE 重新开始编排
+- 已部分启动的进程在取消时已被逆拓扑序停止，无需额外清理
 
 #### 5.2.2 HealthMonitor（健康监控）
 
@@ -464,6 +770,164 @@ flowchart TB
   4. 等待 MC 进入硬件级安全模式（500ms 超时）
   5. 通过 UDS 通知 `em_daemon` 停止运动相关进程
 - **E-Stop 解除**：EM 通过 `AcknowledgeEstopRelease` Service 向 SM 查询 `operator_id` 有效性，确认后才恢复
+
+#### 5.2.8 ResourceGovernor（资源治理器）
+
+ResourceGovernor 负责在进程启动时应用 `resource_limits` 配置，通过 `em_daemon` 与 Linux cgroup / sched_setscheduler 交互，实现进程级资源隔离。
+
+**设计原则**：
+- **配置即策略**：`resource_limits` 在 `config.yaml` 中声明，随进程配置一起加载和校验
+- **启动时绑定**：资源限制在进程启动瞬间生效，不支持运行时动态调整（避免实时线程抖动）
+- **特权操作下沉**：所有涉及 root 权限的操作（cgroup 写入、sched_setscheduler）由 `em_daemon` 执行，EM 主节点仅传递参数
+
+**资源限制项**：
+
+| 字段 | 内核机制 | 说明 |
+|------|---------|------|
+| `cpuset` | cgroup v2 `cpuset.cpus` | CPU 核心绑定，如 `[2,3]` 表示仅使用 CPU2 和 CPU3 |
+| `scheduler` | `sched_setscheduler()` | `fifo` / `rr` / `other`，实时线程必须显式声明 |
+| `priority` | `sched_param.sched_priority` | 实时优先级 1-99，`fifo`/`rr` 时有效 |
+| `mem_limit` | cgroup v2 `memory.max` | 内存硬上限，如 `"512m"` |
+| `gpu_limit` | 自定义 GPU 调度器 | GPU 算力百分比限制（0=禁用 GPU）|
+
+**执行流程**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Orch as Orchestrator
+    participant EM as EM Node
+    participant RG as ResourceGovernor
+    participant Daemon as em_daemon (root)
+    participant Kernel as Linux Kernel
+
+    Orch->>EM: 请求启动进程 P
+    EM->>RG: apply_limits(P.name, P.resource_limits)
+    RG->>RG: 校验配置合法性<br/>(cpuset 范围、priority 范围、scheduler 有效性)
+    RG->>Daemon: UDS: start_with_limits(pid, limits)
+    Daemon->>Kernel: sched_setscheduler(pid, SCHED_FIFO, priority)
+    Daemon->>Kernel: mkdir /sys/fs/cgroup/em/P.name<br/>写入 cpuset.cpus, memory.max
+    Kernel-->>Daemon: ok
+    Daemon-->>RG: ok
+    RG-->>EM: ok
+```
+
+**关键约束**：
+- `cpuset` 必须与系统实际 CPU 拓扑匹配，ConfigManager 加载时校验
+- `fifo`/`rr` 调度策略的进程必须绑定到隔离的 CPU 核心（避免与普通进程竞争），否则启动失败
+- `mem_limit` 写入失败（如 cgroup 未挂载）时记录 WARNING，但允许进程继续运行（避免关键进程无法启动）
+- 所有资源限制操作记录到审计日志（`/var/log/striding/em_resources.log`）
+
+**cgroup 层级设计**：
+
+```
+sys/fs/cgroup/
+└── em/
+    ├── motion_control/          # MC 进程 cgroup
+    │   ├── cpuset.cpus = 2,3
+    │   └── memory.max = 512M
+    ├── hal_ethercat/            # EtherCAT HAL cgroup
+    │   ├── cpuset.cpus = 2
+    │   └── memory.max = 128M
+    └── ...
+```
+
+**错误码**：
+
+| 错误码 | 说明 |
+|--------|------|
+| `2022` | `ERR_RESOURCE_LIMIT_INVALID` — 资源限制配置非法 |
+| `2023` | `ERR_CPUSET_OUT_OF_RANGE` — cpuset 超出系统 CPU 范围 |
+| `2024` | `ERR_SCHEDULER_SET_FAILED` — 调度策略设置失败 |
+| `2025` | `ERR_CGROUP_WRITE_FAILED` — cgroup 写入失败 |
+| `2026` | `ERR_PROCESS_STDOUT_REDIRECT_FAILED` — stdout/stderror 重定向失败 |
+| `2027` | `ERR_PROCESS_SETUID_FAILED` — 设置进程运行用户失败 |
+| `2028` | `ERR_LAYER_TIMEOUT` — 单层启动超时 |
+
+#### 5.2.9 ProcessLauncher（进程启动器）
+
+ProcessLauncher 封装进程启动的具体操作系统调用，与 `em_daemon` 配合完成从配置到运行进程的转换。参考 `run_agibot.yaml` 的实际配置结构，ProcessLauncher 支持丰富的启动参数。
+
+**启动流程**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Orch as Orchestrator
+    participant PL as ProcessLauncher
+    participant PR as ProcessRegistry
+    participant Daemon as em_daemon (root)
+    participant Kernel as Linux Kernel
+
+    Orch->>PL: launch(process_config)
+    PL->>PL: 1. 校验配置合法性<br/>(path存在、args合法、user存在)
+    PL->>PR: 2. 注册进程为 STARTING
+    PL->>PL: 3. 构建启动环境<br/>(env_file + 进程env + 系统env)
+    PL->>PL: 4. 准备文件描述符<br/>(stdout/stderror重定向)
+    PL->>Daemon: 5. UDS: start_process(config)
+    Daemon->>Daemon: 6. fork()
+    Daemon->>Kernel: 7. setuid/setgid (如配置user)
+    Daemon->>Kernel: 8. chdir(work_dir)
+    Daemon->>Kernel: 9. dup2(stdout_fd, 1)<br/>dup2(stderr_fd, 2)
+    Daemon->>Kernel: 10. setenv(env)
+    Daemon->>Kernel: 11. execve(path, args, env)
+    Kernel-->>Daemon: 返回 PID
+    Daemon-->>PL: PID + 启动状态
+    PL->>PR: 更新 PID、状态 RUNNING
+    PL-->>Orch: 启动结果
+```
+
+**配置字段映射**（参考 `run_agibot.yaml` 结构对齐）：
+
+| 配置字段 | 说明 | 默认值 | 对应参考配置字段 |
+|----------|------|--------|-----------------|
+| `path` | 可执行文件路径 | 必填 | `path` |
+| `args` | 命令行参数数组 | `[]` | `args` |
+| `env` | 进程级环境变量映射 | `{}` | `env` |
+| `env_file` | 全局环境变量文件路径（YAML 格式） | 可选 | `env_file` |
+| `work_dir` | 进程工作目录 | `config.work_dir` | `work_dir` |
+| `user` | 运行用户（UID 或用户名） | `agi_user_uid` | `agi_user_uid` |
+| `sudo` | 是否需要 root 权限启动 | `false` | `sudo` |
+| `stdout` | stdout 重定向文件路径 | `/dev/null` | `stdout` |
+| `stderror` | stderr 重定向文件路径 | `stdout`（合并输出） | `stderror` |
+| `simple` | 简单进程标记 | `false` | `simple` |
+
+**环境变量注入顺序**（后覆盖前，优先级递增）：
+
+```
+1. 继承 em_daemon 当前环境变量（如 PATH、LD_LIBRARY_PATH）
+2. 加载 env_file 中的全局变量
+3. 应用进程配置中的 env 字段
+4. 注入 EM 自动变量（只读）：
+   - EM_PROCESS_NAME=<name>
+   - EM_GROUP_NAME=<group>
+   - EM_START_TIME=<unix_timestamp>
+   - EM_LOG_HOME=/opt/striding/log/<name>/
+```
+
+**日志重定向**：
+- 如果配置了 `stdout`/`stderror`，`em_daemon` 在 `exec` 前通过 `dup2` 重定向标准输出/错误到指定文件
+- 文件不存在时自动创建（目录递归创建，权限 755；文件权限 644）
+- 支持变量替换：`${AGIBOT_HOME}`、`${LOG_HOME}`、`${EM_LOG_HOME}` 等
+- 如果未配置，继承 systemd 的 journal 输出（`em_daemon` 以 systemd 服务运行时）
+- **日志轮转**：EM 不负责日志轮转，依赖外部工具（如 `logrotate`）
+
+**simple 进程**：
+- `simple=true` 的进程不参与心跳监控（不订阅 `/em/process_heartbeat`）
+- 不执行就绪探针（启动后即标记为 RUNNING）
+- 不自动重启（`restart_policy` 配置对其无效）
+- EM 不追踪其退出码，进程退出仅记录日志
+- 适用场景：一次性工具进程、调试脚本、校准程序（如 `calibration`、`dynamic_auth`）
+
+**权限模型**：
+- `sudo=false` + `user` 未指定：以 `agi_user_uid`/`agi_user_gid` 运行
+- `sudo=false` + `user` 指定：以指定用户运行
+- `sudo=true`：以 root 运行（`em_daemon` 校验调用者权限后执行）
+- 如果 `sudo=true` 且同时指定 `user`，`user` 优先（`sudo` 视为降级为普通用户）
+
+**启动失败回滚**：
+- 如果 Layer N 中某个进程启动失败（`fork`/`exec` 失败），ProcessLauncher 立即终止同 Layer 中**已启动**的其他进程（按逆启动顺序 SIGTERM）
+- 回滚行为受 `fail_fast` 配置控制：`fail_fast=false` 时不回滚，仅记录失败
 
 ---
 
@@ -667,82 +1131,171 @@ sequenceDiagram
 
 ### 7.2 配置文件结构
 
+配置文件参考 `run_agibot.yaml` 的结构，分为**全局配置**、**进程定义**、**进程组定义**、**编排策略**四部分。
+
 ```yaml
 # /opt/striding/em/config.yaml
 
-signature: "sha256:abc123..."  # 配置文件 SHA256 签名
+signature: "sha256:abc123..."      # 配置文件 SHA256 签名
 version: "1.0.0"
 
+# ─── 全局配置 ───
+env_file: "/opt/striding/em/env.yaml"   # 全局环境变量文件（YAML 格式，所有进程继承）
+agi_user_uid: 1000                       # 默认运行用户 UID
+agi_user_gid: 1000                       # 默认运行用户 GID
+work_dir: "/opt/striding/sys/proc"      # 进程默认工作目录根路径
+
+# ─── 进程定义 ───
 processes:
-  - name: "broker"
-    group: "middleware"
-    command: "/opt/striding/bin/broker"
-    args: ["--config", "/opt/striding/config/broker.yaml"]
-    env: { "ROS_DOMAIN_ID": "0" }
+  # 示例：DDS Broker（中间件基础设施）
+  - name: "iox_roudi"
+    group: "infra"
+    path: "/opt/striding/bin/iox_roudi"      # 可执行文件路径
+    args: ["--config", "/opt/striding/config/roudi.toml"]  # 命令行参数
+    env:                                        # 进程级环境变量（覆盖全局）
+      ROS_DOMAIN_ID: "0"
+      FASTRTPS_DEFAULT_PROFILES_FILE: "/opt/striding/config/fastrtps.xml"
+    work_dir: "/opt/striding/sys/proc/iox_roudi"  # 进程工作目录（覆盖全局）
+    user: "striding"                           # 运行用户（覆盖全局 agi_user_uid）
+    sudo: false                                # 是否需要 root 权限
+    stdout: "/opt/striding/log/iox_roudi/stdout.log"   # stdout 重定向
+    stderror: "/opt/striding/log/iox_roudi/stderr.log"  # stderr 重定向
+    simple: false                              # 是否简单进程（不参与心跳/探针）
     readiness_probe:
       type: "tcp"
       port: 1883
       timeout: 5
+      interval: 1
+      retries: 3
     restart_policy:
       auto_restart: true
       max_restarts: 3
       window_sec: 300
-    safety_class: "base"  # base / critical（L4 触发依据）
+    safety_class: "base"                       # base / critical（L4 触发依据）
 
+  # 示例：运动控制（P0-Critical）
   - name: "motion_control"
     group: "control"
-    command: "/opt/striding/bin/motion_control"
-    depends_on: ["state_manager", "hal_ethercat"]
+    path: "/opt/striding/bin/motion_control"
+    args: ["--config", "/opt/striding/config/mc.yaml"]
+    env:
+      ROS_LOG_DIR: "/opt/striding/log/mc/ros/"
+      LOG_PATH: "/opt/striding/log/mc/"
+    work_dir: "/opt/striding/sys/proc/motion_control"
+    user: "striding"
+    sudo: false
+    stdout: "/opt/striding/log/mc/stdout.log"
+    stderror: "/opt/striding/log/mc/stderr.log"
+    simple: false
     readiness_probe:
       type: "topic"
       topic: "/mc/joint_states"
       timeout: 15
+      interval: 1
+      retries: 3
     restart_policy:
       auto_restart: true
       max_restarts: 3
       window_sec: 300
-    safety_class: "critical"  # P0-Critical，故障时可能触发 L4
+    safety_class: "critical"                   # P0-Critical，故障时可能触发 L4
+    resource_limits:
+      cpuset: [2, 3]              # CPU 核心绑定（空=不限制）
+      scheduler: "fifo"           # 调度策略：fifo / rr / other
+      priority: 99                # 实时优先级（fifo/rr 时有效，1-99）
+      mem_limit: "512m"           # 内存上限（cgroup memory.max）
+      gpu_limit: 0                # GPU 算力限制百分比（0=不使用GPU）
 
+  # 示例：HAL EtherCAT（P0-Critical，特权进程）
   - name: "hal_ethercat"
     group: "infra"
-    command: "/opt/striding/bin/hal_ethercat"
+    path: "/opt/striding/bin/hal_ethercat"
+    env:
+      LD_LIBRARY_PATH: "/opt/ros/humble/lib"
+    work_dir: "/opt/striding/sys/proc/hal_ethercat"
+    user: "root"
+    sudo: true
+    stdout: "/opt/striding/log/hal_ethercat/stdout.log"
+    stderror: "/opt/striding/log/hal_ethercat/stderr.log"
+    simple: false
     readiness_probe:
       type: "tcp"
       port: 502
       timeout: 5
-    safety_class: "critical"  # P0-Critical
+    safety_class: "critical"
 
-# ... 其他进程定义
+  # 示例：动态认证（simple 进程，一次性任务）
+  - name: "dynamic_auth"
+    group: "middleware"
+    path: "/opt/striding/bin/dynamic_auth"
+    env:
+      ROS_DOMAIN_ID: "0"
+    work_dir: "/opt/striding/sys/proc/dynamic_auth"
+    user: "striding"
+    sudo: false
+    simple: true                               # 简单进程：无心跳、无探针、不自动重启
+    safety_class: "base"
 
+  # 示例：校准工具（simple 进程）
+  - name: "calibration"
+    group: "ops"
+    path: "bash"
+    args: ["/opt/striding/scripts/calibration/start_calibration.sh"]
+    env:
+      AMENT_PREFIX_PATH: "/opt/ros/humble"
+      LD_LIBRARY_PATH: "/opt/ros/humble/lib"
+    work_dir: "/opt/striding/sys/proc/calibration"
+    user: "striding"
+    sudo: false
+    simple: true
+    safety_class: "base"
+
+  # ... 其他进程定义（对齐 run_agibot.yaml 的 23 个模块）
+
+# ─── 进程组定义（含 DAG 依赖）───
 groups:
   - name: "infra"
     priority: 0
-    processes: ["hal_sensor", "hal_camera", "hal_lidar", "hal_audio", "hal_ethercat"]
+    processes: ["hal_sensor", "hal_camera", "hal_lidar", "hal_audio", "hal_ethercat", "iox_roudi"]
+    depends_on: []             # 无依赖，Layer 0
 
   - name: "middleware"
     priority: 1
-    processes: ["broker", "gateway", "state_manager", "executive_manager", "setting"]
+    processes: ["broker", "gateway", "state_manager", "executive_manager", "setting", "dynamic_auth"]
     depends_on: ["infra"]
 
   - name: "ops"
     priority: 1
-    processes: ["task_engine", "health_diagnosis", "resource_collection", "data_recorder", "ota"]
+    processes: ["task_engine", "health_diagnosis", "resource_collection", "data_recorder", "fota", "calibration"]
     depends_on: ["middleware"]
 
   - name: "perception"
     priority: 2
     processes: ["perception", "vslam", "lidar_slam", "map_manager"]
-    depends_on: ["middleware"]
+    depends_on: ["middleware", "infra"]   # 感知依赖中间件和 HAL
 
   - name: "control"
     priority: 2
     processes: ["pnc", "motion_control", "motion_player", "motion_streamer"]
-    depends_on: ["perception"]
+    depends_on: ["perception", "infra"]   # 运动控制依赖感知和 HAL
 
   - name: "ai"
     priority: 3
     processes: ["agent", "interaction"]
-    depends_on: ["middleware"]
+    depends_on: ["middleware", "perception"]
+
+# ─── DAG 校验配置 ───
+dag_validation:
+  strict: true                 # 严格模式：有环时拒绝加载
+  max_depth: 10                # 最大 DAG 深度限制（防止过深层级）
+
+# ─── 编排策略 ───
+orchestration:
+  fail_fast: true              # 单层失败是否停止整编排
+  layer_timeout_sec: 30        # 单层启动超时
+  orchestration_timeout_sec: 120  # 整编排超时
+  parallel_max: 8              # 最大并行启动数（限制 fork 风暴）
+  probe_interval_sec: 1        # 就绪探针轮询间隔
+  probe_timeout_sec: 5         # 单个探针请求超时
 ```
 
 ---
@@ -775,6 +1328,10 @@ groups:
 | 2019 | ERR_FORCE_NOT_AUTHORIZED | 请求者无权使用 force 操作 |
 | 2020 | ERR_FAULT_HALT | FAULT 状态下拒绝启动非恢复进程 |
 | 2021 | ERR_RECOVERY_PRECHECK_FAILED | FAULT 恢复前本地检查失败 |
+| 2022 | ERR_RESOURCE_LIMIT_INVALID | 资源限制配置非法 |
+| 2023 | ERR_CPUSET_OUT_OF_RANGE | cpuset 超出系统 CPU 范围 |
+| 2024 | ERR_SCHEDULER_SET_FAILED | 调度策略设置失败 |
+| 2025 | ERR_CGROUP_WRITE_FAILED | cgroup 写入失败 |
 
 ---
 

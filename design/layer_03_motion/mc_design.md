@@ -799,6 +799,17 @@ MP 插值生成一帧关节目标 / MS 重定向输出一帧关节目标
 > **注意**：MotionTarget 覆盖期间，插件仍运行以维护内部状态估计和末端位姿计算。
 > 当 MotionTarget 流结束（MP 播放完成 / MS 流停止），插件无缝接管控制。
 >
+> **部分身体遥操（Partial Body Teleop）**：
+> MS 通过 `MotionTarget.joint_names` 实现自然的关节掩码机制，支持部分身体遥操：
+> - `TELEOP_UPPER`（上肢遥操）：`joint_names` 仅包含上肢关节（waist_yaw、双臂、neck），下肢关节保持 LC 插件输出
+> - `TELEOP_LOWER`（下肢遥操）：`joint_names` 仅包含下肢关节，上肢关节保持 UC 插件输出
+> - `TELEOP_FULL`（全身遥操）：`joint_names` 包含全部关节，插件仅做状态估计
+>
+> UC/LC 插件在部分关节被 MotionTarget 覆盖时的行为：
+> - 被覆盖的关节：插件内部仍计算该关节值（用于状态估计和末端位姿链），但输出被 MotionTarget 覆盖
+> - 未被覆盖的关节：插件正常输出，MC 直接采用
+> - 插件不可感知自己是否被部分覆盖，保持全周期更新（避免状态漂移）
+>
 > **MS 关节目标的平滑处理**：MS 输出的关节目标是重定向后的原始值（未经平滑），MC 在 MotionTarget 覆盖阶段由 UC/LC 插件负责：
 > - 轨迹平滑：对 MotionTarget 做低通滤波或样条插值，消除抖动
 > - 速度/加速度限幅：限制关节速率变化，确保物理可行性
