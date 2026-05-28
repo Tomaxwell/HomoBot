@@ -178,11 +178,17 @@ uint8 control_type           # 0=位置优先, 1=速度优先, 2=力矩优先
 # ms_msgs/msg/RetargetingConfig.msg
 # 重定向配置（用于启动遥操时传递参数）
 
+# 遥操作域枚举
+uint8 TELEOP_FULL   = 0   # 全身遥操作（上肢+下肢）
+uint8 TELEOP_UPPER  = 1   # 仅上肢遥操作（下肢由 LC 插件自主控制）
+uint8 TELEOP_LOWER  = 2   # 仅下肢遥操作（上肢由 UC 插件自主控制）
+
+uint8 teleop_domain         # 遥操作域（决定 MS 控制哪些关节）
 string urdf_hash            # 目标机器人 URDF 的 SHA256 前 8 位（用于校验 MS 与目标机器人模型一致）
 float32[] limb_scale_factors # 肢体缩放因子 [臂长, 腿长, 躯干]
 bool mirror_mode            # 镜像模式（左右翻转）
 float32 position_gain       # 位置映射增益
-string[] enabled_joints     # 启用的关节列表（空=全部）
+string[] enabled_joints     # 启用的关节列表（空=全部，与 teleop_domain 取交集）
 ```
 
 ```
@@ -363,7 +369,8 @@ flowchart TB
 2. **重定向算法可配置**：支持多种 retargeting 策略（基于 IK 的末端匹配、基于关节角度直接映射、混合模式）
 3. **URDF 基准**：重定向以机器人 URDF 为基准，人体骨架做比例缩放适配
 4. **左右镜像模式**：支持操作员面向机器人时的左右镜像映射
-5. **部分身体遥操**：可配置只映射上半身（手臂）或下半身（行走），未映射关节保持当前状态
+5. **部分身体遥操（Function Group State 联动）**：通过 `RetargetingConfig.teleop_domain` 声明遥操范围（`TELEOP_FULL`/`TELEOP_UPPER`/`TELEOP_LOWER`）。MS 仅输出对应域的关节目标，其余关节由 UC/LC 插件继续自主控制。TE 通过 EM 的 `ApplyProcessSet` 切换 Function Group State 时，MS 的遥操域必须与当前激活的运动域匹配
+6. **关节掩码与 MC 协同**：`enabled_joints` 与 `teleop_domain` 取交集生成最终关节掩码。MS 发布的 `MotionTarget` 中 `joint_names` 仅包含被掩码选中的关节，MC 对未选中关节保持插件输出不变
 
 ### 5.3 关键流程
 
@@ -427,6 +434,56 @@ MC 发布 /mc/estop_status (estop_active=true)
   → 封装为 MotionTarget
   → 发布到 /ms/motion_target
 ```
+
+#### 5.3.4 部分身体遥操流程（Function Group State 联动）
+
+部分身体遥操是 MS 与 MC/TE 协同实现的关键功能，支持操作员只控制机器人的部分关节，其余关节由 UC/LC 插件自主运行。
+
+**场景示例**：
+- **上肢遥操**（`TELEOP_UPPER`）：操作员通过 VR 手柄控制机器人双臂做精细操作，下肢由 LC 插件维持站立平衡
+- **下肢遥操**（`TELEOP_LOWER`）：操作员通过动捕服控制机器人行走/下蹲，上肢由 UC 插件保持自然姿态
+
+**启动流程**：
+
+```
+TE 发送 ExecuteTeleop Action (teleop_domain=TELEOP_UPPER)
+  → MS 接收 Goal
+  → MS 检查当前 Function Group State（通过本地缓存的 /sm/robot_state）
+      → 若 motion_domain != TELEOP_UPPER 且 != ACTIVE：
+         → 返回 ERR_MOTION_NOT_ALLOWED（TE 应先通过 EM 切换到正确域）
+  → Retargeting Engine 根据 teleop_domain 加载关节掩码：
+      TELEOP_UPPER → 只映射 waist_yaw + 双臂 + neck 关节
+      TELEOP_LOWER → 只映射双腿关节
+      TELEOP_FULL  → 映射全部关节（默认）
+  → enabled_joints 与 teleop_domain 掩码取交集
+  → 重定向计算只生成被选中关节的目标值
+  → MotionTarget.joint_names 仅包含被选中关节
+  → 发布到 /ms/motion_target @100Hz
+```
+
+**运行时 MC 的处理**：
+
+```
+MC 实时线程每 1ms：
+  → UC/LC 插件正常 update()，输出各自全部关节指令
+  → 指令聚合器合并 lc_cmd + uc_cmd
+  → 检查 /ms/motion_target 缓冲区：
+      - 若关节在 MotionTarget.joint_names 中：用 MotionTarget 值覆盖插件输出
+      - 若关节不在列表中：保持插件输出不变
+  → Safety Guardian 校验后下发
+```
+
+**状态转换与域切换**：
+
+```
+TE 请求从 TELEOP_UPPER 切换到 TELEOP_FULL
+  → TE 先调用 EM::ApplyProcessSet 确认资源就绪
+  → TE 向 MS 发送新的 ExecuteTeleop Goal（teleop_domain=TELEOP_FULL）
+  → MS 内部切换关节掩码，不停断数据流（无缝过渡）
+  → MC 下一周期即收到更多关节的目标值
+```
+
+> **设计原则**：MS 不直接管理 Function Group State，只检查状态兼容性。状态切换请求由 TE 发起、EM 执行编排、SM 仲裁。MS 在状态不匹配时拒绝启动并返回 `ERR_MOTION_NOT_ALLOWED`。
 
 ---
 

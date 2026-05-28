@@ -41,7 +41,7 @@
 | DR | Data Recorder | 数据采集（含VLA训练数据管理） |
 | FOTA | Firmware Over The Air | 固件升级 |
 | Setting | Setting | 设置管理 |
-| RC | Resource Collection | 资源收集 |
+| HealthMonitor | Health Monitor | 系统健康监控（资源/硬件/进程采集） |
 | HAL_EtherCAT | EtherCAT HAL | SOEM主站，EtherCAT硬件抽象 |
 | HAL_Camera | Camera HAL | RealSense相机管理（D435×1 + D405×2） |
 | HAL_Lidar | Lidar HAL | Livox Mid-360s固态激光雷达管理 |
@@ -58,7 +58,8 @@
 ├─────────────────────────────────────────────────────────────┤
 │  交互层       Interaction                                    │
 ├─────────────────────────────────────────────────────────────┤
-│  应用层       FOTA, Setting, DR, RC                          │
+│  应用层       FOTA, Setting, DR                              │
+│  中间件层     SM, EM, Gateway, HDS, HealthMonitor            │
 ├─────────────────────────────────────────────────────────────┤
 │  感知/规划层  Perception, PnC, VSLAM, Lidar-SLAM, MapManager │
 ├─────────────────────────────────────────────────────────────┤
@@ -69,6 +70,58 @@
 │  HAL & Infra  HAL_EtherCAT, HAL_Camera, HAL_Lidar, HAL_Sensor, HAL_Audio, TF, systemd│
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### 功能域分组（6+1 架构映射）
+
+当前分层架构按功能域自然映射，便于模块化开发和故障隔离：
+
+| 功能域 | 对应模块 | 实时要求 | 安全等级 |
+|--------|---------|---------|---------|
+| **运动域** | MC, UC, LC, MS, MP, HAL_EtherCAT | 1kHz 硬实时 | ASIL-D |
+| **感知域** | HAL_Camera, HAL_Lidar, HAL_Sensor, Perception, VSLAM, Lidar-SLAM | 传感器采集硬实时 | ASIL-B~D |
+| **认知域** | Agent (VLA/LLM) | 50~200ms 软实时 | QM~ASIL-B |
+| **交互域** | Interaction, HAL_Audio | 100~500ms 软实时 | QM |
+| **任务域** | TE | 10~50Hz | ASIL-B |
+| **平台域** | EM, Gateway, Setting, FOTA, DR, TF, HealthMonitor | 非实时 | QM~ASIL-B |
+
+> 注：安全机制作为**跨域横切关注点**，由 SM（状态校验）、HDS（故障诊断）、MC（Safety Guardian）分别承担，不独立为单一域。
+
+### Function Group State（功能域状态）
+
+EM 支持按功能域分组管理进程启停。每个域有一组独立的 Function Group State，SM 通过域级状态切换实现任务级资源调度：
+
+```
+整机状态（SM）：ACTIVE
+  ├─ motion_domain: {Idle, Balancing, Walking, Manipulating, Teleop_Upper, Teleop_Full}
+  ├─ perception_domain: {Idle, Active, SLAM}
+  ├─ cognition_domain: {Idle, Active}
+  ├─ interaction_domain: {Idle, Listening, Speaking, Interactive}
+  └─ task_domain: {Idle, Executing, Paused}
+```
+
+**部分身体遥操示例**：
+- SM 设置 `motion_domain = Teleop_Upper`：MS 控制上肢，LC 插件继续下肢平衡
+- SM 设置 `motion_domain = Teleop_Full`：MS 控制全身关节
+- TE 请求切换前，通过 EM 确认目标域的进程资源已分配
+
+### 资源隔离原则
+
+EM 在进程启动时通过 Execution Manifest 配置资源隔离：
+
+```yaml
+# em_manifest.yaml 示例
+motion_control:
+  cpuset: [2, 3]        # CPU 核心隔离
+  priority: 99          # SCHED_FIFO 实时优先级
+  mem_limit: 512M
+cognition:
+  cpuset: [4, 5, 6, 7]  # GPU 任务容忍调度
+  gpu_limit: 80%
+```
+
+### 时间同步服务
+
+平台域提供统一传感器时间同步（gPTP/PTP），由 HAL_Sensor 作为时间主节点分发，HAL_Camera、HAL_Lidar 启动时注册同步。
 
 ### 核心通信模式
 
@@ -151,7 +204,7 @@
 - [FOTA](design/layer_03_application/fota_design.md) — 固件升级（下载/验证/安装/回滚）
 - [Setting](design/layer_03_application/setting_design.md) — 设置管理（统一参数存储+Schema验证+热更新）
 - [Data Recorder (DR)](design/layer_03_application/dr_design.md) — 数据采集（VLA训练数据+故障黑匣子）
-- [Resource Collection (RC)](design/layer_03_application/rc_design.md) — 资源收集（日志聚合+性能监控+事件收集）
+- [Health Monitor](design/layer_06_middleware/health_monitor_design.md) — 系统健康监控（CPU/内存/磁盘/电池/温度/网络/GPU/进程/急停采集）
 - [Perception](design/layer_04_perception_planning/perception_design.md) — 感知融合（视觉+Lidar多传感器融合）
 - [Planning and Control (PnC)](design/layer_04_perception_planning/pnc_design.md) — 规划控制（路径规划 + 行走控制信号输出）
 - [Vision SLAM (VSLAM)](design/layer_04_perception_planning/vslam_design.md) — 视觉建图定位（特征提取+VO+回环检测）
@@ -165,7 +218,9 @@
 - [State Manager (SM)](design/layer_06_middleware/sm_design.md) — 全局状态机（17状态，足式人形模式扩充）
 - [Executive Manager (EM)](design/layer_06_middleware/em_design_v2.md) — 进程生命周期治理
 - [Gateway](design/layer_06_middleware/gateway_design.md) — 端侧网关（云端/APP通信唯一出口）
-- [Health Diagnosis System (HDS)](design/layer_06_middleware/hds_design.md) — 健康监测（多维诊断、故障定级）
+- [Health Diagnosis System (HDS)](design/layer_06_middleware/hds_design.md) — 健康监测（多维诊断、故障定级，单SOC原始设计）
+- [HDS Master](design/layer_06_middleware/hds_master_design.md) — HDS 主节点（全局定级权威、Slave管理、跨SOC关联诊断、Bridge协议服务端）
+- [HDS Slave](design/layer_06_middleware/hds_slave_design.md) — HDS 从节点（本地采集代理、自治安全守护、Bridge协议客户端）
 - [EtherCAT HAL](design/layer_07_hal_infra/hal_ethercat_design.md) — SOEM主站，EtherCAT硬件抽象
 - [HAL Camera](design/layer_07_hal_infra/hal_camera_design.md) — RealSense相机管理（D435×1 + D405×2）
 - [HAL Lidar](design/layer_07_hal_infra/hal_lidar_design.md) — Livox Mid-360s固态激光雷达管理
@@ -210,3 +265,12 @@
 - EM 是唯一有权启动/停止其他模块进程的组件
 - Gateway 是唯一的云端通信出口，不允许其他模块直接访问云端 API
 - HDS 负责故障定级，其他模块只上报原始数据，不做业务决策
+- 设计文档中的图表全部都需要设计成mermaid图表。
+
+## gstack
+Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
+Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
+/design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy,
+/canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies,
+/setup-deploy, /setup-gbrain, /retro, /investigate, /document-release, /document-generate, /codex,
+/cso, /autoplan, /plan-devex-review, /devex-review, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, /learn.

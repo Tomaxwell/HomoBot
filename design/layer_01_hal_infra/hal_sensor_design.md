@@ -321,3 +321,130 @@ hal_sensor/
 | 数据丢失率 | < 0.1% | 正常运行时 |
 | CPU 占用 | < 5% (RK3588) | 所有传感器同时运行 |
 | 内存占用 | < 100MB | 含驱动缓冲 |
+
+---
+
+## 12. 平台域时间同步服务
+
+### 12.1 设计目标
+
+机器人端侧系统中，多传感器数据（IMU 200Hz、Camera 30Hz、Lidar 10Hz、EtherCAT 1kHz）需要在统一的时间基准下融合。HAL Sensor 作为平台域的核心基础设施模块，承担**时间同步主节点**职责，通过 gPTP（IEEE 802.1AS）或 PTP（IEEE 1588-2008）向全系统分发主时钟。
+
+**关键需求**：
+- 端到端时间同步精度 < 1ms（满足运动控制 1kHz 周期的相位对齐）
+- 时间主节点故障时可自动降级到备源（如 EtherCAT DC 时钟）
+- 各节点可查询当前时间同步状态和健康度
+
+### 12.2 架构设计
+
+```mermaid
+flowchart TB
+    subgraph Platform["平台域"]
+        HS["HAL_Sensor<br/>Time Master Node<br/>gPTP/PTP Grandmaster"]
+        HE["HAL_EtherCAT<br/>Time Slave Node<br/>EtherCAT DC 时钟"]
+        HC["HAL_Camera<br/>Time Slave Node<br/>硬件触发同步"]
+        HL["HAL_Lidar<br/>Time Slave Node<br/>PTP 从时钟"]
+    end
+
+    subgraph Middleware["中间件层"]
+        SM["SM<br/>时间同步状态订阅"]
+        MC["MC<br/>控制周期时间戳对齐"]
+    end
+
+    subgraph App["应用层"]
+        Per["Perception<br/>多传感器时间戳对齐"]
+        DR["DR<br/>数据录制时间基准"]
+    end
+
+    HS --"gPTP Sync<br/>Multicast"--> HE
+    HS --"gPTP Sync<br/>Multicast"--> HC
+    HS --"gPTP Sync<br/>Multicast"--> HL
+    HS --"/platform/time_sync_status"--> SM
+    HS --"/platform/time_sync_status"--> MC
+    HS --"/platform/time_sync_status"--> Per
+    HS --"/platform/time_sync_status"--> DR
+
+    HE --"备用主时钟"--x|故障切换| HS
+```
+
+### 12.3 时间同步接口
+
+```
+# platform_msgs/msg/TimeSyncStatus.msg
+# 时间同步状态广播（平台域通用接口）
+
+builtin_interfaces/Time stamp          # 本消息发布时间（主时钟基准）
+string master_node                     # 当前主时钟节点名（如 "hal_sensor"）
+uint8 sync_protocol                    # 0=gPTP, 1=PTP, 2=NTP_FALLBACK
+float32 offset_from_master_ms          # 与主时钟的偏移量（ms，主节点为 0）
+float32 mean_path_delay_ms             # 平均路径延迟（ms）
+uint8 clock_quality                    # 时钟质量等级（0=UNKNOWN, 1=CRITICAL, 2=WARN, 3=GOOD, 4=EXCELLENT）
+uint8 slave_count                      # 当前连接的从节点数量
+string[] slave_node_names              # 从节点名称列表
+bool sync_active                       # 同步是否活跃
+string status_message                  # 状态描述
+```
+
+```
+# platform_msgs/srv/RegisterTimeSlave.srv
+# 从节点注册（节点启动时向时间主节点注册）
+
+string node_name                       # 请求注册的节点名
+string hardware_interface              # 硬件接口类型（"ethercat" / "camera" / "lidar" / "sensor"）
+float32 required_accuracy_ms           # 该节点所需的时间精度（ms）
+---
+bool success
+uint16 error_code
+string message
+float32 granted_accuracy_ms            # 主节点承诺提供的精度
+builtin_interfaces/Time current_master_time  # 当前主时钟时间（用于从节点初始对齐）
+```
+
+```
+# platform_msgs/srv/UnregisterTimeSlave.srv
+# 从节点注销
+
+string node_name
+---
+bool success
+```
+
+### 12.4 接口汇总表
+
+| Topic / Service | 类型 | 方向 | 频率 | 说明 |
+|-----------------|------|------|------|------|
+| `/platform/time_sync_status` | `platform_msgs/TimeSyncStatus` | HAL_Sensor → ALL | 1Hz | 时间同步状态广播 |
+| `/platform/register_time_slave` | `platform_msgs/srv/RegisterTimeSlave` | 各节点 → HAL_Sensor | 注册时 | 从节点注册 |
+| `/platform/unregister_time_slave` | `platform_msgs/srv/UnregisterTimeSlave` | 各节点 → HAL_Sensor | 注销时 | 从节点注销 |
+
+### 12.5 关键设计决策
+
+1. **HAL_Sensor 作为主时钟源**：IMU 的高精度时钟（通常由 MEMS 器件的温补晶振提供）经过 PPS（Pulse Per Second）校准后，可作为全系统最高精度的时间基准。HAL_Sensor 中的 `TimeSyncMaster` 组件负责 gPTP/PTP 协议栈管理
+2. **gPTP 优先，PTP 回退**：若网络交换机支持 gPTP（802.1AS），则使用 gPTP（精度 < 100μs）；否则回退到软件 PTP（精度 < 1ms）；若两者均不可用，回退到 NTP（精度 < 10ms，仅用于非运动控制模块）
+3. **EtherCAT DC 作为备源**：当 HAL_Sensor 的 IMU 时钟失效时，系统可切换以 EtherCAT 分布式时钟（DC）为主时钟。切换由 HAL_Sensor 检测并广播 `/platform/time_sync_status` 变更
+4. **硬件触发同步**：Camera 和 Lidar 支持外部触发（PPS / trigger 信号）时，HAL_Sensor 通过 GPIO 输出同步脉冲，确保采集时间戳与主时钟对齐
+5. **ROS2 消息时间戳统一**：所有 ROS2 消息的 `header.stamp` 字段必须使用主时钟基准（`CLOCK_REALTIME` 经同步校准后）。HAL_Sensor 提供 `get_master_time()` 工具函数供各模块查询
+
+### 12.6 故障处理
+
+| 故障场景 | 检测方式 | 响应 |
+|---------|---------|------|
+| IMU 时钟漂移 > 1ms | 连续 3 周期 offset > 阈值 | 上报 WARNING，尝试重新校准 |
+| gPTP 同步丢失 | slave_count 下降 + mean_path_delay 异常 | 广播 `clock_quality=WARN`，触发 NTP 回退 |
+| 主节点完全失效 | EM 检测到 HAL_Sensor 心跳超时 | EM 启动备用主节点（EtherCAT HAL），各从节点自动重注册 |
+| 从节点未按时注册 | 启动后 10s 内未收到 RegisterTimeSlave | 该节点的数据被 Perception 标记为 "未同步"，不参与融合 |
+
+### 12.7 包结构补充
+
+```
+platform_msgs/                    # 平台域通用消息包（新增）
+    msg/
+        TimeSyncStatus.msg
+    srv/
+        RegisterTimeSlave.srv
+        UnregisterTimeSlave.srv
+    CMakeLists.txt
+    package.xml
+```
+
+> **注意**：`platform_msgs` 是跨 HAL 层和中间件层的共享消息包，不隶属于单一模块。时间同步服务由 HAL_Sensor 实现，但接口定义放在 platform_msgs 中以供全系统使用。
